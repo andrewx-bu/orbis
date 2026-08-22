@@ -1,5 +1,3 @@
-# Pull Request
-
 ## Summary
 
 <!-- Describe what this pull request changes and why. -->

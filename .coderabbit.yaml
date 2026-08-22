@@ -1,0 +1,59 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+tone_instructions: >-
+  Be concise, direct, technical, and neutral.
+  State the issue, why it matters, and the concrete fix or direction.
+
+reviews:
+  profile: assertive
+  high_level_summary: false
+  review_status: false
+  commit_status: false
+  changed_files_summary: false
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  assess_linked_issues: false
+  related_issues: false
+  related_prs: false
+  suggested_labels: false
+  suggested_reviewers: false
+  in_progress_fortune: false
+  poem: false
+  enable_prompt_for_ai_agents: false
+  path_instructions:
+    - path: "**/*"
+      instructions: |-
+        Review changed code for concrete, actionable problems.
+
+        Prioritize:
+
+        - Bugs and incorrect behavior
+        - Edge cases and incorrect assumptions
+        - Error-handling and performance problems
+        - Maintainability and misleading naming
+        - Unnecessary, dead, or redundant code
+
+        Avoid duplicate feedback.
+        Specific, actionable nitpicks are acceptable.
+        Leave precise inline comments on the relevant lines.
+  auto_review:
+    auto_pause_after_reviewed_commits: 0
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+    autofix:
+      enabled: false
+    fix_ci:
+      enabled: false
+    resolve_merge_conflict:
+      enabled: false
+  pre_merge_checks:
+    docstrings:
+      mode: off
+    title:
+      mode: off
+    description:
+      mode: off
+    issue_assessment:
+      mode: off

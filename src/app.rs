@@ -18,6 +18,7 @@ struct App {
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     error: Option<Box<dyn Error>>,
+    initial_redraw_pending: bool,
 }
 
 impl App {
@@ -34,9 +35,9 @@ impl App {
             Err(error) => return self.exit_with_error(event_loop, error),
         };
 
-        window.request_redraw();
         self.window = Some(window);
         self.renderer = Some(renderer);
+        self.initial_redraw_pending = true;
     }
 
     fn exit_with_error(&mut self, event_loop: &ActiveEventLoop, error: impl Error + 'static) {
@@ -49,6 +50,17 @@ impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_none() && self.error.is_none() {
             self.create_window(event_loop);
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if !self.initial_redraw_pending {
+            return;
+        }
+
+        if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
+            self.initial_redraw_pending = false;
         }
     }
 
@@ -68,6 +80,9 @@ impl ApplicationHandler for App {
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Focused(true) | WindowEvent::Occluded(false) => {
+                window.request_redraw();
+            }
             WindowEvent::Resized(size) => {
                 let Some(renderer) = self.renderer.as_mut() else {
                     return;

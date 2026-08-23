@@ -3,7 +3,8 @@ use std::{error::Error, fmt, sync::Arc};
 use wgpu::{
     Color, CommandEncoderDescriptor, CurrentSurfaceTexture, Device, DeviceDescriptor, Instance,
     LoadOp, Operations, Queue, RenderPassColorAttachment, RenderPassDescriptor,
-    RequestAdapterOptions, StoreOp, Surface, SurfaceConfiguration, TextureViewDescriptor,
+    RequestAdapterOptions, StoreOp, Surface, SurfaceConfiguration, SurfaceTexture,
+    TextureViewDescriptor,
 };
 use winit::{dpi::PhysicalSize, window::Window};
 
@@ -81,19 +82,8 @@ impl Renderer {
             return Ok(());
         }
 
-        let (frame, should_reconfigure) = match self.surface.get_current_texture() {
-            CurrentSurfaceTexture::Success(frame) => (frame, false),
-            CurrentSurfaceTexture::Suboptimal(frame) => (frame, true),
-            CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => return Ok(()),
-            CurrentSurfaceTexture::Outdated => {
-                self.surface.configure(&self.device, &self.config);
-                return Ok(());
-            }
-            CurrentSurfaceTexture::Lost => {
-                self.recreate_surface()?;
-                return Ok(());
-            }
-            CurrentSurfaceTexture::Validation => return Err(RendererError::SurfaceValidation),
+        let Some((frame, should_reconfigure)) = self.acquire_frame()? else {
+            return Ok(());
         };
         let view = frame.texture.create_view(&TextureViewDescriptor::default());
         let mut encoder = self
@@ -119,6 +109,7 @@ impl Renderer {
             });
         }
 
+        self.window.pre_present_notify();
         self.queue.submit([encoder.finish()]);
         self.queue.present(frame);
 
@@ -127,6 +118,27 @@ impl Renderer {
         }
 
         Ok(())
+    }
+
+    fn acquire_frame(&mut self) -> Result<Option<(SurfaceTexture, bool)>, RendererError> {
+        for _ in 0..2 {
+            match self.surface.get_current_texture() {
+                CurrentSurfaceTexture::Success(frame) => return Ok(Some((frame, false))),
+                CurrentSurfaceTexture::Suboptimal(frame) => return Ok(Some((frame, true))),
+                CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => {
+                    return Ok(None);
+                }
+                CurrentSurfaceTexture::Outdated => {
+                    self.surface.configure(&self.device, &self.config);
+                }
+                CurrentSurfaceTexture::Lost => self.recreate_surface()?,
+                CurrentSurfaceTexture::Validation => {
+                    return Err(RendererError::SurfaceValidation);
+                }
+            }
+        }
+
+        Ok(None)
     }
 
     fn recreate_surface(&mut self) -> Result<(), RendererError> {

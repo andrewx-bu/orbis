@@ -8,9 +8,9 @@ use wgpu::{
 use winit::{dpi::PhysicalSize, window::Window};
 
 const CLEAR_COLOR: Color = Color {
-    r: 0.02,
-    g: 0.03,
-    b: 0.05,
+    r: 0.05,
+    g: 0.15,
+    b: 0.4,
     a: 1.0,
 };
 

@@ -1,3 +1,5 @@
-fn main() {
-    println!("Hello, Orbis!");
+mod app;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    app::run()
 }

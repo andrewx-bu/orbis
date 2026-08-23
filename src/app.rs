@@ -1,9 +1,9 @@
-use std::error::Error;
+use std::{error::Error, sync::Arc};
 
+use crate::renderer::Renderer;
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
-    error::OsError,
     event::WindowEvent,
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     window::{Window, WindowId},
@@ -15,8 +15,9 @@ const INITIAL_HEIGHT: f64 = 720.0;
 
 #[derive(Default)]
 struct App {
-    window: Option<Window>,
-    startup_error: Option<OsError>,
+    window: Option<Arc<Window>>,
+    renderer: Option<Renderer>,
+    error: Option<Box<dyn Error>>,
 }
 
 impl App {
@@ -24,20 +25,29 @@ impl App {
         let attributes = Window::default_attributes()
             .with_title(WINDOW_TITLE)
             .with_inner_size(LogicalSize::new(INITIAL_WIDTH, INITIAL_HEIGHT));
+        let window = match event_loop.create_window(attributes) {
+            Ok(window) => Arc::new(window),
+            Err(error) => return self.exit_with_error(event_loop, error),
+        };
+        let renderer = match pollster::block_on(Renderer::new(window.clone())) {
+            Ok(renderer) => renderer,
+            Err(error) => return self.exit_with_error(event_loop, error),
+        };
 
-        match event_loop.create_window(attributes) {
-            Ok(window) => self.window = Some(window),
-            Err(error) => {
-                self.startup_error = Some(error);
-                event_loop.exit();
-            }
-        }
+        window.request_redraw();
+        self.window = Some(window);
+        self.renderer = Some(renderer);
+    }
+
+    fn exit_with_error(&mut self, event_loop: &ActiveEventLoop, error: impl Error + 'static) {
+        self.error = Some(Box::new(error));
+        event_loop.exit();
     }
 }
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_none() && self.startup_error.is_none() {
+        if self.window.is_none() && self.error.is_none() {
             self.create_window(event_loop);
         }
     }
@@ -56,8 +66,26 @@ impl ApplicationHandler for App {
             return;
         }
 
-        if let WindowEvent::CloseRequested = event {
-            event_loop.exit();
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Resized(size) => {
+                let Some(renderer) = self.renderer.as_mut() else {
+                    return;
+                };
+
+                renderer.resize(size);
+                window.request_redraw();
+            }
+            WindowEvent::RedrawRequested => {
+                let Some(renderer) = self.renderer.as_mut() else {
+                    return;
+                };
+
+                if let Err(error) = renderer.render() {
+                    self.exit_with_error(event_loop, error);
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -69,8 +97,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let mut app = App::default();
     event_loop.run_app(&mut app)?;
 
-    match app.startup_error {
-        Some(error) => Err(Box::new(error)),
+    match app.error {
+        Some(error) => Err(error),
         None => Ok(()),
     }
 }

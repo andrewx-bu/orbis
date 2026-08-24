@@ -5,11 +5,11 @@ use std::{error::Error, fmt, sync::Arc};
 use self::surface::{FrameAcquisition, SurfaceState};
 use bytemuck::{Pod, Zeroable};
 use wgpu::{
-    Buffer, BufferAddress, BufferUsages, Color, ColorTargetState, CommandEncoderDescriptor,
+    Buffer, BufferAddress, BufferUsages, Color, ColorTargetState, CommandEncoderDescriptor, Device,
     FragmentState, IndexFormat, LoadOp, Operations, PipelineLayoutDescriptor, PrimitiveState,
     RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor,
-    ShaderModuleDescriptor, ShaderSource, StoreOp, TextureViewDescriptor, VertexAttribute,
-    VertexBufferLayout, VertexState, VertexStepMode,
+    ShaderModuleDescriptor, ShaderSource, StoreOp, TextureFormat, TextureViewDescriptor,
+    VertexAttribute, VertexBufferLayout, VertexState, VertexStepMode,
     util::{BufferInitDescriptor, DeviceExt},
 };
 use winit::{dpi::PhysicalSize, window::Window};
@@ -72,7 +72,7 @@ pub enum RenderOutcome {
 impl Renderer {
     pub fn new(window: Arc<Window>) -> Result<Self, RendererError> {
         let surface = pollster::block_on(SurfaceState::new(window))?;
-        let render_pipeline = create_render_pipeline(&surface);
+        let render_pipeline = create_render_pipeline(surface.device(), surface.format());
         let vertex_buffer = surface.device().create_buffer_init(&BufferInitDescriptor {
             label: Some("Orbis vertex buffer"),
             contents: bytemuck::cast_slice(VERTICES),
@@ -139,48 +139,42 @@ impl Renderer {
     }
 }
 
-fn create_render_pipeline(surface: &SurfaceState) -> RenderPipeline {
-    let shader = surface
-        .device()
-        .create_shader_module(ShaderModuleDescriptor {
-            label: Some("Orbis geometry shader"),
-            source: ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
-        });
-    let layout = surface
-        .device()
-        .create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("Orbis render pipeline layout"),
-            bind_group_layouts: &[],
-            immediate_size: 0,
-        });
+fn create_render_pipeline(device: &Device, surface_format: TextureFormat) -> RenderPipeline {
+    let shader = device.create_shader_module(ShaderModuleDescriptor {
+        label: Some("Orbis geometry shader"),
+        source: ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+    });
+    let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+        label: Some("Orbis render pipeline layout"),
+        bind_group_layouts: &[],
+        immediate_size: 0,
+    });
 
-    surface
-        .device()
-        .create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("Orbis render pipeline"),
-            layout: Some(&layout),
-            vertex: VertexState {
-                module: &shader,
-                entry_point: Some("vertex_main"),
-                buffers: &[Some(Vertex::layout())],
-                compilation_options: Default::default(),
-            },
-            primitive: PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            fragment: Some(FragmentState {
-                module: &shader,
-                entry_point: Some("fragment_main"),
-                targets: &[Some(ColorTargetState {
-                    format: surface.format(),
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            multiview_mask: None,
-            cache: None,
-        })
+    device.create_render_pipeline(&RenderPipelineDescriptor {
+        label: Some("Orbis render pipeline"),
+        layout: Some(&layout),
+        vertex: VertexState {
+            module: &shader,
+            entry_point: Some("vertex_main"),
+            buffers: &[Some(Vertex::layout())],
+            compilation_options: Default::default(),
+        },
+        primitive: PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: Default::default(),
+        fragment: Some(FragmentState {
+            module: &shader,
+            entry_point: Some("fragment_main"),
+            targets: &[Some(ColorTargetState {
+                format: surface_format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 #[derive(Debug)]

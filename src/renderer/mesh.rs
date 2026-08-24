@@ -79,3 +79,34 @@ impl GpuMesh {
         render_pass.draw_indexed(0..self.index_count, 0, 0..1);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quad_mesh_matches_shader_contract() {
+        let layout = Vertex::layout();
+        let [position, color] = layout.attributes else {
+            panic!("vertex layout must contain position and color attributes");
+        };
+
+        assert_eq!(layout.array_stride, 20);
+        assert_eq!(layout.step_mode, VertexStepMode::Vertex);
+        assert_eq!(position.format, wgpu::VertexFormat::Float32x2);
+        assert_eq!(position.offset, 0);
+        assert_eq!(position.shader_location, 0);
+        assert_eq!(color.format, wgpu::VertexFormat::Float32x3);
+        assert_eq!(color.offset, 8);
+        assert_eq!(color.shader_location, 1);
+
+        assert_eq!(QUAD_VERTICES.len(), 4);
+        assert_eq!(QUAD_INDICES.len(), 6);
+        assert_eq!(QUAD_INDICES.len() % 3, 0);
+        assert!(
+            QUAD_INDICES
+                .iter()
+                .all(|&index| usize::from(index) < QUAD_VERTICES.len())
+        );
+    }
+}

@@ -72,11 +72,12 @@ impl Renderer {
                 },
             };
             let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("Orbis clear pass"),
+                label: Some("Orbis render pass"),
                 color_attachments: &[Some(color_attachment)],
                 ..Default::default()
             });
             render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.draw(0..3, 0..1);
         }
 
         self.surface.present(encoder.finish(), frame);

@@ -130,13 +130,30 @@ impl SurfaceState {
             .instance
             .create_surface(self.window.clone())
             .map_err(RendererError::create_surface)?;
-        let config = surface
-            .get_default_config(&self.adapter, self.size.width, self.size.height)
-            .ok_or_else(RendererError::unsupported_surface)?;
+        let capabilities = surface.get_capabilities(&self.adapter);
+        let color_space_supported =
+            self.config
+                .color_space
+                .to_color_spaces()
+                .is_none_or(|color_space| {
+                    capabilities
+                        .color_spaces(self.config.format)
+                        .contains(color_space)
+                });
 
-        surface.configure(&self.device, &config);
+        if !capabilities.formats.contains(&self.config.format)
+            || !capabilities
+                .present_modes
+                .contains(&self.config.present_mode)
+            || !capabilities.alpha_modes.contains(&self.config.alpha_mode)
+            || !capabilities.usages.contains(self.config.usage)
+            || !color_space_supported
+        {
+            return Err(RendererError::unsupported_surface());
+        }
+
+        surface.configure(&self.device, &self.config);
         self.surface = surface;
-        self.config = config;
 
         Ok(())
     }

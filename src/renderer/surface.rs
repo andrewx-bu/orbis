@@ -63,6 +63,10 @@ impl SurfaceState {
         &self.device
     }
 
+    pub(super) fn format(&self) -> wgpu::TextureFormat {
+        self.config.format
+    }
+
     pub(super) fn resize(&mut self, size: PhysicalSize<u32>) {
         self.size = size;
 

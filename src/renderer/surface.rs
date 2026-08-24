@@ -26,24 +26,24 @@ impl SurfaceState {
         let instance = Instance::default();
         let surface = instance
             .create_surface(window.clone())
-            .map_err(RendererError::CreateSurface)?;
+            .map_err(RendererError::create_surface)?;
         let adapter = instance
             .request_adapter(&RequestAdapterOptions {
                 compatible_surface: Some(&surface),
                 ..Default::default()
             })
             .await
-            .map_err(RendererError::RequestAdapter)?;
+            .map_err(RendererError::request_adapter)?;
         let (device, queue) = adapter
             .request_device(&DeviceDescriptor {
                 label: Some("Orbis device"),
                 ..Default::default()
             })
             .await
-            .map_err(RendererError::RequestDevice)?;
+            .map_err(RendererError::request_device)?;
         let config = surface
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
-            .ok_or(RendererError::UnsupportedSurface)?;
+            .ok_or_else(RendererError::unsupported_surface)?;
 
         surface.configure(&device, &config);
 
@@ -75,36 +75,37 @@ impl SurfaceState {
         self.configure();
     }
 
-    pub(super) fn acquire_frame(&mut self) -> Result<Option<SurfaceFrame>, RendererError> {
+    pub(super) fn acquire_frame(&mut self) -> Result<FrameAcquisition, RendererError> {
         if self.is_minimized() {
-            return Ok(None);
+            return Ok(FrameAcquisition::Wait);
         }
 
         for _ in 0..FRAME_ACQUISITION_ATTEMPTS {
             match self.surface.get_current_texture() {
                 CurrentSurfaceTexture::Success(texture) => {
-                    return Ok(Some(SurfaceFrame::optimal(texture)));
+                    return Ok(FrameAcquisition::Ready(SurfaceFrame::optimal(texture)));
                 }
                 CurrentSurfaceTexture::Suboptimal(texture) => {
-                    return Ok(Some(SurfaceFrame::suboptimal(texture)));
+                    return Ok(FrameAcquisition::Ready(SurfaceFrame::suboptimal(texture)));
                 }
-                CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => {
-                    return Ok(None);
+                CurrentSurfaceTexture::Timeout => return Ok(FrameAcquisition::Retry),
+                CurrentSurfaceTexture::Occluded => {
+                    return Ok(FrameAcquisition::Wait);
                 }
                 CurrentSurfaceTexture::Outdated => self.configure(),
                 CurrentSurfaceTexture::Lost => self.recreate()?,
                 CurrentSurfaceTexture::Validation => {
-                    return Err(RendererError::SurfaceValidation);
+                    return Err(RendererError::surface_validation());
                 }
             }
         }
 
-        Ok(None)
+        Ok(FrameAcquisition::Retry)
     }
 
     pub(super) fn present(&mut self, commands: CommandBuffer, frame: SurfaceFrame) {
-        self.window.pre_present_notify();
         self.queue.submit([commands]);
+        self.window.pre_present_notify();
         self.queue.present(frame.texture);
 
         if frame.reconfigure_after_present {
@@ -124,10 +125,10 @@ impl SurfaceState {
         let surface = self
             .instance
             .create_surface(self.window.clone())
-            .map_err(RendererError::CreateSurface)?;
+            .map_err(RendererError::create_surface)?;
         let config = surface
             .get_default_config(&self.adapter, self.size.width, self.size.height)
-            .ok_or(RendererError::UnsupportedSurface)?;
+            .ok_or_else(RendererError::unsupported_surface)?;
 
         surface.configure(&self.device, &config);
         self.surface = surface;
@@ -135,6 +136,12 @@ impl SurfaceState {
 
         Ok(())
     }
+}
+
+pub(super) enum FrameAcquisition {
+    Ready(SurfaceFrame),
+    Retry,
+    Wait,
 }
 
 pub(super) struct SurfaceFrame {

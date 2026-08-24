@@ -1,6 +1,6 @@
 use std::{error::Error, sync::Arc};
 
-use crate::renderer::{Renderer, RendererError};
+use crate::renderer::{RenderOutcome, Renderer, RendererError};
 use winit::{
     application::ApplicationHandler,
     dpi::{LogicalSize, PhysicalSize},
@@ -31,7 +31,7 @@ impl WindowState {
             .with_title(WINDOW_TITLE)
             .with_inner_size(LogicalSize::new(INITIAL_WIDTH, INITIAL_HEIGHT));
         let window = Arc::new(event_loop.create_window(attributes)?);
-        let renderer = pollster::block_on(Renderer::new(window.clone()))?;
+        let renderer = Renderer::new(window.clone())?;
 
         Ok(Self {
             window,
@@ -61,7 +61,11 @@ impl WindowState {
     }
 
     fn render(&mut self) -> Result<(), RendererError> {
-        self.renderer.render()
+        if self.renderer.render()? == RenderOutcome::Retry {
+            self.request_redraw();
+        }
+
+        Ok(())
     }
 }
 

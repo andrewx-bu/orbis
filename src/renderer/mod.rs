@@ -2,7 +2,7 @@ mod surface;
 
 use std::{error::Error, fmt, sync::Arc};
 
-use self::surface::SurfaceState;
+use self::surface::{FrameAcquisition, SurfaceState};
 use wgpu::{
     Color, CommandEncoderDescriptor, LoadOp, Operations, RenderPassColorAttachment,
     RenderPassDescriptor, StoreOp, TextureViewDescriptor,
@@ -20,9 +20,16 @@ pub struct Renderer {
     surface: SurfaceState,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RenderOutcome {
+    Presented,
+    Retry,
+    Skipped,
+}
+
 impl Renderer {
-    pub async fn new(window: Arc<Window>) -> Result<Self, RendererError> {
-        let surface = SurfaceState::new(window).await?;
+    pub fn new(window: Arc<Window>) -> Result<Self, RendererError> {
+        let surface = pollster::block_on(SurfaceState::new(window))?;
 
         Ok(Self { surface })
     }
@@ -31,9 +38,11 @@ impl Renderer {
         self.surface.resize(size);
     }
 
-    pub fn render(&mut self) -> Result<(), RendererError> {
-        let Some(frame) = self.surface.acquire_frame()? else {
-            return Ok(());
+    pub fn render(&mut self) -> Result<RenderOutcome, RendererError> {
+        let frame = match self.surface.acquire_frame()? {
+            FrameAcquisition::Ready(frame) => frame,
+            FrameAcquisition::Retry => return Ok(RenderOutcome::Retry),
+            FrameAcquisition::Wait => return Ok(RenderOutcome::Skipped),
         };
         let view = frame
             .texture()
@@ -64,25 +73,53 @@ impl Renderer {
 
         self.surface.present(encoder.finish(), frame);
 
-        Ok(())
+        Ok(RenderOutcome::Presented)
     }
 }
 
 #[derive(Debug)]
 pub enum RendererError {
-    CreateSurface(wgpu::CreateSurfaceError),
-    RequestAdapter(wgpu::RequestAdapterError),
-    RequestDevice(wgpu::RequestDeviceError),
+    CreateSurface(Box<dyn Error>),
+    RequestAdapter(Box<dyn Error>),
+    RequestDevice(Box<dyn Error>),
     UnsupportedSurface,
     SurfaceValidation,
+}
+
+impl RendererError {
+    fn create_surface(source: impl Error + 'static) -> Self {
+        Self::CreateSurface(Box::new(source))
+    }
+
+    fn request_adapter(source: impl Error + 'static) -> Self {
+        Self::RequestAdapter(Box::new(source))
+    }
+
+    fn request_device(source: impl Error + 'static) -> Self {
+        Self::RequestDevice(Box::new(source))
+    }
+
+    fn unsupported_surface() -> Self {
+        Self::UnsupportedSurface
+    }
+
+    fn surface_validation() -> Self {
+        Self::SurfaceValidation
+    }
 }
 
 impl fmt::Display for RendererError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::CreateSurface(error) => write!(formatter, "failed to create surface: {error}"),
-            Self::RequestAdapter(error) => write!(formatter, "failed to request adapter: {error}"),
-            Self::RequestDevice(error) => write!(formatter, "failed to request device: {error}"),
+            Self::CreateSurface(source) => {
+                write!(formatter, "failed to create surface: {source}")
+            }
+            Self::RequestAdapter(source) => {
+                write!(formatter, "failed to request adapter: {source}")
+            }
+            Self::RequestDevice(source) => {
+                write!(formatter, "failed to request device: {source}")
+            }
             Self::UnsupportedSurface => formatter.write_str("surface is not supported by adapter"),
             Self::SurfaceValidation => formatter.write_str("surface validation failed"),
         }
@@ -92,10 +129,68 @@ impl fmt::Display for RendererError {
 impl Error for RendererError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::CreateSurface(error) => Some(error),
-            Self::RequestAdapter(error) => Some(error),
-            Self::RequestDevice(error) => Some(error),
+            Self::CreateSurface(source)
+            | Self::RequestAdapter(source)
+            | Self::RequestDevice(source) => Some(source.as_ref()),
             Self::UnsupportedSurface | Self::SurfaceValidation => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug)]
+    struct TestError(&'static str);
+
+    impl fmt::Display for TestError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str(self.0)
+        }
+    }
+
+    impl Error for TestError {}
+
+    #[test]
+    fn sourced_errors_include_context_and_preserve_their_source() {
+        let errors = [
+            (
+                RendererError::create_surface(TestError("test source")),
+                "failed to create surface: test source",
+            ),
+            (
+                RendererError::request_adapter(TestError("test source")),
+                "failed to request adapter: test source",
+            ),
+            (
+                RendererError::request_device(TestError("test source")),
+                "failed to request device: test source",
+            ),
+        ];
+
+        for (error, expected_message) in errors {
+            assert_eq!(error.to_string(), expected_message);
+            assert_eq!(
+                error.source().map(ToString::to_string).as_deref(),
+                Some("test source")
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_surface_has_no_source() {
+        let error = RendererError::unsupported_surface();
+
+        assert_eq!(error.to_string(), "surface is not supported by adapter");
+        assert!(error.source().is_none());
+    }
+
+    #[test]
+    fn surface_validation_has_no_source() {
+        let error = RendererError::surface_validation();
+
+        assert_eq!(error.to_string(), "surface validation failed");
+        assert!(error.source().is_none());
     }
 }

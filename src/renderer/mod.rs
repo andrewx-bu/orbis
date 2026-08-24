@@ -3,11 +3,14 @@ mod surface;
 use std::{error::Error, fmt, sync::Arc};
 
 use self::surface::{FrameAcquisition, SurfaceState};
+use bytemuck::{Pod, Zeroable};
 use wgpu::{
-    Color, ColorTargetState, CommandEncoderDescriptor, FragmentState, LoadOp, Operations,
-    PipelineLayoutDescriptor, PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor,
-    RenderPipeline, RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource, StoreOp,
-    TextureViewDescriptor, VertexState,
+    Buffer, BufferAddress, BufferUsages, Color, ColorTargetState, CommandEncoderDescriptor,
+    FragmentState, LoadOp, Operations, PipelineLayoutDescriptor, PrimitiveState,
+    RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor,
+    ShaderModuleDescriptor, ShaderSource, StoreOp, TextureViewDescriptor, VertexAttribute,
+    VertexBufferLayout, VertexState, VertexStepMode,
+    util::{BufferInitDescriptor, DeviceExt},
 };
 use winit::{dpi::PhysicalSize, window::Window};
 
@@ -18,9 +21,42 @@ const CLEAR_COLOR: Color = Color {
     a: 1.0,
 };
 
+const VERTICES: &[Vertex] = &[
+    Vertex::new([0.0, 0.6], [0.9, 0.2, 0.2]),
+    Vertex::new([-0.6, -0.6], [0.2, 0.9, 0.3]),
+    Vertex::new([0.6, -0.6], [0.2, 0.4, 1.0]),
+];
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct Vertex {
+    position: [f32; 2],
+    color: [f32; 3],
+}
+
+impl Vertex {
+    const ATTRIBUTES: [VertexAttribute; 2] = wgpu::vertex_attr_array![
+        0 => Float32x2,
+        1 => Float32x3,
+    ];
+
+    const fn new(position: [f32; 2], color: [f32; 3]) -> Self {
+        Self { position, color }
+    }
+
+    fn layout() -> VertexBufferLayout<'static> {
+        VertexBufferLayout {
+            array_stride: size_of::<Self>() as BufferAddress,
+            step_mode: VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBUTES,
+        }
+    }
+}
+
 pub struct Renderer {
     surface: SurfaceState,
     render_pipeline: RenderPipeline,
+    vertex_buffer: Buffer,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -34,10 +70,16 @@ impl Renderer {
     pub fn new(window: Arc<Window>) -> Result<Self, RendererError> {
         let surface = pollster::block_on(SurfaceState::new(window))?;
         let render_pipeline = create_render_pipeline(&surface);
+        let vertex_buffer = surface.device().create_buffer_init(&BufferInitDescriptor {
+            label: Some("Orbis vertex buffer"),
+            contents: bytemuck::cast_slice(VERTICES),
+            usage: BufferUsages::VERTEX,
+        });
 
         Ok(Self {
             surface,
             render_pipeline,
+            vertex_buffer,
         })
     }
 
@@ -77,6 +119,7 @@ impl Renderer {
                 ..Default::default()
             });
             render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.draw(0..3, 0..1);
         }
 
@@ -109,7 +152,7 @@ fn create_render_pipeline(surface: &SurfaceState) -> RenderPipeline {
             vertex: VertexState {
                 module: &shader,
                 entry_point: Some("vertex_main"),
-                buffers: &[],
+                buffers: &[Some(Vertex::layout())],
                 compilation_options: Default::default(),
             },
             primitive: PrimitiveState::default(),

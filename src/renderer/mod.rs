@@ -6,7 +6,7 @@ use self::surface::{FrameAcquisition, SurfaceState};
 use bytemuck::{Pod, Zeroable};
 use wgpu::{
     Buffer, BufferAddress, BufferUsages, Color, ColorTargetState, CommandEncoderDescriptor,
-    FragmentState, LoadOp, Operations, PipelineLayoutDescriptor, PrimitiveState,
+    FragmentState, IndexFormat, LoadOp, Operations, PipelineLayoutDescriptor, PrimitiveState,
     RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor,
     ShaderModuleDescriptor, ShaderSource, StoreOp, TextureViewDescriptor, VertexAttribute,
     VertexBufferLayout, VertexState, VertexStepMode,
@@ -22,10 +22,12 @@ const CLEAR_COLOR: Color = Color {
 };
 
 const VERTICES: &[Vertex] = &[
-    Vertex::new([0.0, 0.6], [0.9, 0.2, 0.2]),
+    Vertex::new([-0.6, 0.6], [0.9, 0.2, 0.2]),
     Vertex::new([-0.6, -0.6], [0.2, 0.9, 0.3]),
     Vertex::new([0.6, -0.6], [0.2, 0.4, 1.0]),
+    Vertex::new([0.6, 0.6], [0.9, 0.8, 0.2]),
 ];
+const INDICES: &[u16] = &[0, 1, 2, 0, 2, 3];
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -57,6 +59,7 @@ pub struct Renderer {
     surface: SurfaceState,
     render_pipeline: RenderPipeline,
     vertex_buffer: Buffer,
+    index_buffer: Buffer,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -75,11 +78,17 @@ impl Renderer {
             contents: bytemuck::cast_slice(VERTICES),
             usage: BufferUsages::VERTEX,
         });
+        let index_buffer = surface.device().create_buffer_init(&BufferInitDescriptor {
+            label: Some("Orbis index buffer"),
+            contents: bytemuck::cast_slice(INDICES),
+            usage: BufferUsages::INDEX,
+        });
 
         Ok(Self {
             surface,
             render_pipeline,
             vertex_buffer,
+            index_buffer,
         })
     }
 
@@ -120,7 +129,8 @@ impl Renderer {
             });
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.draw(0..3, 0..1);
+            render_pass.set_index_buffer(self.index_buffer.slice(..), IndexFormat::Uint16);
+            render_pass.draw_indexed(0..INDICES.len() as u32, 0, 0..1);
         }
 
         self.surface.present(encoder.finish(), frame);
@@ -133,7 +143,7 @@ fn create_render_pipeline(surface: &SurfaceState) -> RenderPipeline {
     let shader = surface
         .device()
         .create_shader_module(ShaderModuleDescriptor {
-            label: Some("Orbis triangle shader"),
+            label: Some("Orbis geometry shader"),
             source: ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
     let layout = surface

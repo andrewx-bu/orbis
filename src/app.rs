@@ -1,9 +1,9 @@
-use std::error::Error;
+use std::{error::Error, sync::Arc};
 
+use crate::renderer::{RenderOutcome, Renderer, RendererError};
 use winit::{
     application::ApplicationHandler,
-    dpi::LogicalSize,
-    error::OsError,
+    dpi::{LogicalSize, PhysicalSize},
     event::WindowEvent,
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     window::{Window, WindowId},
@@ -15,30 +15,86 @@ const INITIAL_HEIGHT: f64 = 720.0;
 
 #[derive(Default)]
 struct App {
-    window: Option<Window>,
-    startup_error: Option<OsError>,
+    window_state: Option<WindowState>,
+    error: Option<Box<dyn Error>>,
+}
+
+struct WindowState {
+    window: Arc<Window>,
+    renderer: Renderer,
+    initial_redraw_pending: bool,
+}
+
+impl WindowState {
+    fn new(event_loop: &ActiveEventLoop) -> Result<Self, Box<dyn Error>> {
+        let attributes = Window::default_attributes()
+            .with_title(WINDOW_TITLE)
+            .with_inner_size(LogicalSize::new(INITIAL_WIDTH, INITIAL_HEIGHT));
+        let window = Arc::new(event_loop.create_window(attributes)?);
+        let renderer = Renderer::new(window.clone())?;
+
+        Ok(Self {
+            window,
+            renderer,
+            initial_redraw_pending: true,
+        })
+    }
+
+    fn id(&self) -> WindowId {
+        self.window.id()
+    }
+
+    fn request_redraw(&self) {
+        self.window.request_redraw();
+    }
+
+    fn request_initial_redraw(&mut self) {
+        if self.initial_redraw_pending {
+            self.request_redraw();
+            self.initial_redraw_pending = false;
+        }
+    }
+
+    fn resize(&mut self, size: PhysicalSize<u32>) {
+        self.renderer.resize(size);
+        self.request_redraw();
+    }
+
+    fn render(&mut self) -> Result<(), RendererError> {
+        if self.renderer.render()? == RenderOutcome::Retry {
+            self.request_redraw();
+        }
+
+        Ok(())
+    }
 }
 
 impl App {
     fn create_window(&mut self, event_loop: &ActiveEventLoop) {
-        let attributes = Window::default_attributes()
-            .with_title(WINDOW_TITLE)
-            .with_inner_size(LogicalSize::new(INITIAL_WIDTH, INITIAL_HEIGHT));
+        let window_state = match WindowState::new(event_loop) {
+            Ok(window_state) => window_state,
+            Err(error) => return self.exit_with_error(event_loop, error),
+        };
 
-        match event_loop.create_window(attributes) {
-            Ok(window) => self.window = Some(window),
-            Err(error) => {
-                self.startup_error = Some(error);
-                event_loop.exit();
-            }
-        }
+        self.window_state = Some(window_state);
+    }
+
+    fn exit_with_error(&mut self, event_loop: &ActiveEventLoop, error: impl Into<Box<dyn Error>>) {
+        self.error = Some(error.into());
+        event_loop.exit();
     }
 }
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_none() && self.startup_error.is_none() {
+        if self.window_state.is_none() && self.error.is_none() {
             self.create_window(event_loop);
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(window_state) = self.window_state.as_mut() {
+            window_state.request_initial_redraw();
         }
     }
 
@@ -48,16 +104,26 @@ impl ApplicationHandler for App {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        let Some(window) = self.window.as_ref() else {
+        let Some(window_state) = self.window_state.as_mut() else {
             return;
         };
 
-        if window.id() != window_id {
+        if window_state.id() != window_id {
             return;
         }
 
-        if let WindowEvent::CloseRequested = event {
-            event_loop.exit();
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Focused(true) | WindowEvent::Occluded(false) => {
+                window_state.request_redraw();
+            }
+            WindowEvent::Resized(size) => window_state.resize(size),
+            WindowEvent::RedrawRequested => {
+                if let Err(error) = window_state.render() {
+                    self.exit_with_error(event_loop, error);
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -69,8 +135,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let mut app = App::default();
     event_loop.run_app(&mut app)?;
 
-    match app.startup_error {
-        Some(error) => Err(Box::new(error)),
+    match app.error {
+        Some(error) => Err(error),
         None => Ok(()),
     }
 }

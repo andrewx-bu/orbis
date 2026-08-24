@@ -3,7 +3,7 @@
 ## Project Overview
 
 Orbis is a procedural planet renderer and simulation project written in Rust.
-The current application is a native desktop program built with `winit`.
+The current application is a native desktop program built with `winit` and `wgpu`.
 The long-term rendering and simulation direction is documented in `PLAN.md`.
 
 Keep implementations simple and observable while the rendering foundation is still developing.
@@ -18,7 +18,10 @@ Keep implementations simple and observable while the rendering foundation is sti
 │   └── pull_request_template.md  # Pull request description format
 ├── src/
 │   ├── app.rs                    # Native application and window lifecycle
-│   └── main.rs                   # Executable entry point
+│   ├── main.rs                   # Executable entry point
+│   └── renderer/
+│       ├── mod.rs                # High-level rendering behavior
+│       └── surface.rs            # GPU and presentation-surface lifecycle
 ├── Cargo.lock                    # Locked dependency versions
 ├── Cargo.toml                    # Package metadata and dependencies
 ├── justfile                      # Common development commands
@@ -31,6 +34,8 @@ Keep implementations simple and observable while the rendering foundation is sti
 
 Keep `src/main.rs` limited to process startup and top-level error propagation.
 Keep native event-loop and window-lifecycle behavior in `src/app.rs`.
+Keep high-level rendering behavior in `src/renderer/mod.rs`.
+Keep GPU initialization, surface recovery, resizing, and presentation in `src/renderer/surface.rs`.
 Add modules only when a concrete responsibility needs its own boundary.
 Keep the project as one crate until multiple crates provide a clear architectural benefit.
 

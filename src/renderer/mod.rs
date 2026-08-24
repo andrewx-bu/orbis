@@ -4,8 +4,10 @@ use std::{error::Error, fmt, sync::Arc};
 
 use self::surface::{FrameAcquisition, SurfaceState};
 use wgpu::{
-    Color, CommandEncoderDescriptor, LoadOp, Operations, RenderPassColorAttachment,
-    RenderPassDescriptor, StoreOp, TextureViewDescriptor,
+    Color, ColorTargetState, CommandEncoderDescriptor, FragmentState, LoadOp, Operations,
+    PipelineLayoutDescriptor, PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor,
+    RenderPipeline, RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource, StoreOp,
+    TextureViewDescriptor, VertexState,
 };
 use winit::{dpi::PhysicalSize, window::Window};
 
@@ -18,6 +20,7 @@ const CLEAR_COLOR: Color = Color {
 
 pub struct Renderer {
     surface: SurfaceState,
+    render_pipeline: RenderPipeline,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30,8 +33,12 @@ pub enum RenderOutcome {
 impl Renderer {
     pub fn new(window: Arc<Window>) -> Result<Self, RendererError> {
         let surface = pollster::block_on(SurfaceState::new(window))?;
+        let render_pipeline = create_render_pipeline(&surface);
 
-        Ok(Self { surface })
+        Ok(Self {
+            surface,
+            render_pipeline,
+        })
     }
 
     pub fn resize(&mut self, size: PhysicalSize<u32>) {
@@ -64,17 +71,63 @@ impl Renderer {
                     store: StoreOp::Store,
                 },
             };
-            let _render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("Orbis clear pass"),
+            let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("Orbis render pass"),
                 color_attachments: &[Some(color_attachment)],
                 ..Default::default()
             });
+            render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.draw(0..3, 0..1);
         }
 
         self.surface.present(encoder.finish(), frame);
 
         Ok(RenderOutcome::Presented)
     }
+}
+
+fn create_render_pipeline(surface: &SurfaceState) -> RenderPipeline {
+    let shader = surface
+        .device()
+        .create_shader_module(ShaderModuleDescriptor {
+            label: Some("Orbis triangle shader"),
+            source: ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+        });
+    let layout = surface
+        .device()
+        .create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Orbis render pipeline layout"),
+            bind_group_layouts: &[],
+            immediate_size: 0,
+        });
+
+    surface
+        .device()
+        .create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("Orbis render pipeline"),
+            layout: Some(&layout),
+            vertex: VertexState {
+                module: &shader,
+                entry_point: Some("vertex_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            primitive: PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(FragmentState {
+                module: &shader,
+                entry_point: Some("fragment_main"),
+                targets: &[Some(ColorTargetState {
+                    format: surface.format(),
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
 }
 
 #[derive(Debug)]

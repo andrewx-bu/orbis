@@ -1158,6 +1158,7 @@ dependencies = [
 name = "orbis"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "pollster",
  "wgpu",
  "winit",

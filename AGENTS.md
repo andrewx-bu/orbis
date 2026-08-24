@@ -19,7 +19,9 @@ Keep implementations simple and observable while the rendering foundation is sti
 ├── src/
 │   ├── app.rs                    # Native application and window lifecycle
 │   ├── main.rs                   # Executable entry point
-│   └── renderer.rs               # GPU initialization and rendering
+│   └── renderer/
+│       ├── mod.rs                # High-level rendering behavior
+│       └── surface.rs            # GPU and presentation-surface lifecycle
 ├── Cargo.lock                    # Locked dependency versions
 ├── Cargo.toml                    # Package metadata and dependencies
 ├── justfile                      # Common development commands
@@ -32,7 +34,8 @@ Keep implementations simple and observable while the rendering foundation is sti
 
 Keep `src/main.rs` limited to process startup and top-level error propagation.
 Keep native event-loop and window-lifecycle behavior in `src/app.rs`.
-Keep GPU surface, device, queue, and rendering behavior in `src/renderer.rs`.
+Keep high-level rendering behavior in `src/renderer/mod.rs`.
+Keep GPU initialization, surface recovery, resizing, and presentation in `src/renderer/surface.rs`.
 Add modules only when a concrete responsibility needs its own boundary.
 Keep the project as one crate until multiple crates provide a clear architectural benefit.
 

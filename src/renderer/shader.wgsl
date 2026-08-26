@@ -4,14 +4,14 @@ struct VertexOutput {
 }
 
 struct VertexInput {
-    @location(0) position: vec2f,
+    @location(0) position: vec3f,
     @location(1) color: vec3f,
 }
 
 @vertex
 fn vertex_main(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
-    output.position = vec4f(input.position, 0.0, 1.0);
+    output.position = vec4f(input.position, 1.0);
     output.color = input.color;
     return output;
 }

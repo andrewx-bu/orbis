@@ -70,7 +70,10 @@ impl WindowState {
     }
 
     fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
-        let Some((delta_x, delta_y)) = self.orbit_input.cursor_moved(position) else {
+        let Some((delta_x, delta_y)) = self
+            .orbit_input
+            .cursor_moved(position, self.window.scale_factor())
+        else {
             return;
         };
 
@@ -149,6 +152,7 @@ impl ApplicationHandler for App {
             WindowEvent::Focused(false) | WindowEvent::CursorLeft { .. } => {
                 window_state.reset_orbit_input();
             }
+            WindowEvent::ScaleFactorChanged { .. } => window_state.reset_orbit_input(),
             WindowEvent::MouseInput { state, button, .. } => {
                 window_state.mouse_button(state, button);
             }

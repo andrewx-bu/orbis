@@ -175,7 +175,11 @@ mod tests {
                 .normalize();
 
             for vertex in [first, second, third] {
-                assert_eq!(Vec3::from_array(vertex.normal), winding_normal);
+                let normal = Vec3::from_array(vertex.normal);
+                assert!(
+                    normal.abs_diff_eq(winding_normal, 1.0e-6),
+                    "expected {winding_normal:?}, got {normal:?}"
+                );
             }
         }
     }

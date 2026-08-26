@@ -1,7 +1,7 @@
 # Orbis
 
 Orbis is a procedural planet renderer and simulation project written in Rust.
-The current native demo renders a perspective-projected, depth-tested indexed cube.
+The current native demo renders a directionally lit, perspective-projected, depth-tested indexed cube.
 Drag with the left mouse button to orbit the cube.
 Use the mouse wheel or trackpad to zoom.
 

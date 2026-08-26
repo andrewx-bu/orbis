@@ -5,6 +5,7 @@ tone_instructions: >-
 
 reviews:
   profile: assertive
+  request_changes_workflow: true
   high_level_summary: false
   review_status: false
   commit_status: false

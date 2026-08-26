@@ -1,4 +1,5 @@
 mod camera;
+mod lighting;
 mod mesh;
 mod surface;
 
@@ -6,6 +7,7 @@ use std::{error::Error, fmt, sync::Arc};
 
 use self::{
     camera::CameraResources,
+    lighting::LightingResources,
     mesh::{GpuMesh, Vertex},
     surface::{FrameAcquisition, SurfaceState},
 };
@@ -31,6 +33,7 @@ const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32Float;
 pub struct Renderer {
     surface: SurfaceState,
     camera: CameraResources,
+    lighting: LightingResources,
     render_pipeline: RenderPipeline,
     mesh: GpuMesh,
 }
@@ -46,16 +49,19 @@ impl Renderer {
     pub fn new(window: Arc<Window>) -> Result<Self, RendererError> {
         let surface = pollster::block_on(SurfaceState::new(window))?;
         let camera = CameraResources::new(surface.device(), surface.size());
+        let lighting = LightingResources::new(surface.device());
         let render_pipeline = create_render_pipeline(
             surface.device(),
             surface.format(),
             camera.bind_group_layout(),
+            lighting.bind_group_layout(),
         );
         let mesh = GpuMesh::cube(surface.device());
 
         Ok(Self {
             surface,
             camera,
+            lighting,
             render_pipeline,
             mesh,
         })
@@ -117,6 +123,7 @@ impl Renderer {
             });
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, self.camera.bind_group(), &[]);
+            render_pass.set_bind_group(1, self.lighting.bind_group(), &[]);
             self.mesh.draw(&mut render_pass);
         }
 
@@ -130,6 +137,7 @@ fn create_render_pipeline(
     device: &Device,
     surface_format: TextureFormat,
     camera_bind_group_layout: &BindGroupLayout,
+    lighting_bind_group_layout: &BindGroupLayout,
 ) -> RenderPipeline {
     let shader = device.create_shader_module(ShaderModuleDescriptor {
         label: Some("Orbis geometry shader"),
@@ -137,7 +145,10 @@ fn create_render_pipeline(
     });
     let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("Orbis render pipeline layout"),
-        bind_group_layouts: &[Some(camera_bind_group_layout)],
+        bind_group_layouts: &[
+            Some(camera_bind_group_layout),
+            Some(lighting_bind_group_layout),
+        ],
         immediate_size: 0,
     });
 

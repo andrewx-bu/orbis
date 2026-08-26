@@ -74,6 +74,14 @@ Add focused tests for behavior that can be tested without a native window or GPU
 Keep platform-specific application code small so core logic can be tested independently as the project grows.
 CI must pass formatting, Clippy, and tests with all targets and features enabled.
 
+## Code Review Standards
+
+Focus review comments on concrete bugs, regressions, security issues, flaky behavior, and meaningful maintainability risks.
+Attach each finding to the smallest relevant code range.
+Use one short paragraph to explain what can fail, when it can fail, and how to fix it.
+Avoid praise, summaries, style-only suggestions, duplicate findings, and speculative concerns.
+If there are no actionable findings, say so without inventing comments.
+
 ## Documentation
 
 Update `README.md` when setup or user-facing behavior changes.

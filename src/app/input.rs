@@ -29,10 +29,12 @@ impl OrbitInput {
     }
 }
 
-pub(super) fn scroll_amount(delta: MouseScrollDelta) -> f32 {
+pub(super) fn scroll_amount(delta: MouseScrollDelta, scale_factor: f64) -> f32 {
     match delta {
         MouseScrollDelta::LineDelta(_, vertical) => vertical,
-        MouseScrollDelta::PixelDelta(position) => (position.y / PIXELS_PER_SCROLL_LINE) as f32,
+        MouseScrollDelta::PixelDelta(position) => {
+            (position.to_logical::<f64>(scale_factor).y / PIXELS_PER_SCROLL_LINE) as f32
+        }
     }
 }
 
@@ -65,11 +67,22 @@ mod tests {
 
     #[test]
     fn scroll_input_normalizes_lines_and_pixels() {
-        assert_eq!(scroll_amount(MouseScrollDelta::LineDelta(0.0, 2.0)), 2.0);
         assert_eq!(
-            scroll_amount(MouseScrollDelta::PixelDelta(PhysicalPosition::new(
-                0.0, 150.0
-            ))),
+            scroll_amount(MouseScrollDelta::LineDelta(0.0, 2.0), 2.0),
+            2.0
+        );
+        assert_eq!(
+            scroll_amount(
+                MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, 150.0)),
+                1.0
+            ),
+            1.5
+        );
+        assert_eq!(
+            scroll_amount(
+                MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, 300.0)),
+                2.0
+            ),
             1.5
         );
     }

@@ -80,7 +80,10 @@ impl WindowState {
     }
 
     fn mouse_wheel(&mut self, delta: MouseScrollDelta) {
-        if self.renderer.zoom_camera(scroll_amount(delta)) {
+        if self
+            .renderer
+            .zoom_camera(scroll_amount(delta, self.window.scale_factor()))
+        {
             self.request_redraw();
         }
     }

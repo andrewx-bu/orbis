@@ -1,14 +1,10 @@
-use winit::{
-    dpi::{LogicalPosition, PhysicalPosition},
-    event::{ElementState, MouseButton, MouseScrollDelta},
-};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta};
 
 const PIXELS_PER_SCROLL_LINE: f64 = 100.0;
 
 #[derive(Default)]
 pub(super) struct OrbitInput {
     dragging: bool,
-    cursor_position: Option<LogicalPosition<f64>>,
 }
 
 impl OrbitInput {
@@ -18,29 +14,18 @@ impl OrbitInput {
         }
 
         self.dragging = state == ElementState::Pressed;
-        self.cursor_position = None;
     }
 
-    pub(super) fn cursor_moved(
-        &mut self,
-        position: PhysicalPosition<f64>,
-        scale_factor: f64,
-    ) -> Option<(f32, f32)> {
+    pub(super) fn mouse_motion(&self, delta: (f64, f64)) -> Option<(f32, f32)> {
         if !self.dragging {
             return None;
         }
 
-        let position = position.to_logical(scale_factor);
-        let previous_position = self.cursor_position.replace(position)?;
-        Some((
-            (position.x - previous_position.x) as f32,
-            (position.y - previous_position.y) as f32,
-        ))
+        Some((delta.0 as f32, delta.1 as f32))
     }
 
     pub(super) fn reset(&mut self) {
         self.dragging = false;
-        self.cursor_position = None;
     }
 }
 
@@ -54,60 +39,28 @@ pub(super) fn scroll_amount(delta: MouseScrollDelta) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use winit::dpi::PhysicalPosition;
 
     #[test]
-    fn orbit_drag_anchors_before_reporting_movement() {
+    fn orbit_drag_reports_raw_movement_while_left_button_is_pressed() {
         let mut input = OrbitInput::default();
 
-        assert_eq!(
-            input.cursor_moved(PhysicalPosition::new(10.0, 20.0), 1.0),
-            None
-        );
+        assert_eq!(input.mouse_motion((5.0, -8.0)), None);
         input.mouse_button(ElementState::Pressed, MouseButton::Left);
-        assert_eq!(
-            input.cursor_moved(PhysicalPosition::new(10.0, 20.0), 1.0),
-            None
-        );
-        assert_eq!(
-            input.cursor_moved(PhysicalPosition::new(15.0, 12.0), 1.0),
-            Some((5.0, -8.0))
-        );
+        assert_eq!(input.mouse_motion((5.0, -8.0)), Some((5.0, -8.0)));
     }
 
     #[test]
     fn orbit_drag_stops_after_release_or_reset() {
         let mut input = OrbitInput::default();
         input.mouse_button(ElementState::Pressed, MouseButton::Left);
-        input.cursor_moved(PhysicalPosition::new(10.0, 20.0), 1.0);
 
         input.mouse_button(ElementState::Released, MouseButton::Left);
-        assert_eq!(
-            input.cursor_moved(PhysicalPosition::new(15.0, 12.0), 1.0),
-            None
-        );
+        assert_eq!(input.mouse_motion((5.0, -8.0)), None);
 
         input.mouse_button(ElementState::Pressed, MouseButton::Left);
-        input.cursor_moved(PhysicalPosition::new(10.0, 20.0), 1.0);
         input.reset();
-        assert_eq!(
-            input.cursor_moved(PhysicalPosition::new(15.0, 12.0), 1.0),
-            None
-        );
-    }
-
-    #[test]
-    fn orbit_drag_is_consistent_across_scale_factors() {
-        let mut input = OrbitInput::default();
-        input.mouse_button(ElementState::Pressed, MouseButton::Left);
-
-        assert_eq!(
-            input.cursor_moved(PhysicalPosition::new(20.0, 40.0), 2.0),
-            None
-        );
-        assert_eq!(
-            input.cursor_moved(PhysicalPosition::new(30.0, 24.0), 2.0),
-            Some((5.0, -8.0))
-        );
+        assert_eq!(input.mouse_motion((5.0, -8.0)), None);
     }
 
     #[test]

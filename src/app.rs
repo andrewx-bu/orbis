@@ -6,8 +6,8 @@ use self::input::{OrbitInput, scroll_amount};
 use crate::renderer::{RenderOutcome, Renderer, RendererError};
 use winit::{
     application::ApplicationHandler,
-    dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
-    event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
+    dpi::{LogicalSize, PhysicalSize},
+    event::{DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     window::{Window, WindowId},
 };
@@ -69,11 +69,8 @@ impl WindowState {
         self.orbit_input.mouse_button(state, button);
     }
 
-    fn cursor_moved(&mut self, position: PhysicalPosition<f64>) {
-        let Some((delta_x, delta_y)) = self
-            .orbit_input
-            .cursor_moved(position, self.window.scale_factor())
-        else {
+    fn mouse_motion(&mut self, delta: (f64, f64)) {
+        let Some((delta_x, delta_y)) = self.orbit_input.mouse_motion(delta) else {
             return;
         };
 
@@ -152,11 +149,9 @@ impl ApplicationHandler for App {
             WindowEvent::Focused(false) | WindowEvent::CursorLeft { .. } => {
                 window_state.reset_orbit_input();
             }
-            WindowEvent::ScaleFactorChanged { .. } => window_state.reset_orbit_input(),
             WindowEvent::MouseInput { state, button, .. } => {
                 window_state.mouse_button(state, button);
             }
-            WindowEvent::CursorMoved { position, .. } => window_state.cursor_moved(position),
             WindowEvent::MouseWheel { delta, .. } => window_state.mouse_wheel(delta),
             WindowEvent::Resized(size) => window_state.resize(size),
             WindowEvent::RedrawRequested => {
@@ -165,6 +160,21 @@ impl ApplicationHandler for App {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
+        let Some(window_state) = self.window_state.as_mut() else {
+            return;
+        };
+
+        if let DeviceEvent::MouseMotion { delta } = event {
+            window_state.mouse_motion(delta);
         }
     }
 }

@@ -20,6 +20,7 @@ Keep implementations simple and observable while the rendering foundation is sti
 │   ├── app.rs                    # Native application and window lifecycle
 │   ├── main.rs                   # Executable entry point
 │   └── renderer/
+│       ├── camera.rs             # Camera transforms and GPU uniforms
 │       ├── mesh.rs               # GPU mesh data and indexed drawing
 │       ├── mod.rs                # High-level rendering behavior
 │       ├── shader.wgsl           # GPU shader entry points and interfaces
@@ -36,6 +37,7 @@ Keep implementations simple and observable while the rendering foundation is sti
 
 Keep `src/main.rs` limited to process startup and top-level error propagation.
 Keep native event-loop and window-lifecycle behavior in `src/app.rs`.
+Keep camera projection, view transforms, and camera uniform resources in `src/renderer/camera.rs`.
 Keep GPU mesh data, vertex layouts, buffer ownership, and indexed drawing in `src/renderer/mesh.rs`.
 Keep high-level rendering behavior in `src/renderer/mod.rs`.
 Keep WGSL shader entry points and GPU interface definitions in `src/renderer/shader.wgsl`.

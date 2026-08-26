@@ -1,17 +1,19 @@
+mod camera;
 mod mesh;
 mod surface;
 
 use std::{error::Error, fmt, sync::Arc};
 
 use self::{
+    camera::CameraResources,
     mesh::{GpuMesh, Vertex},
     surface::{FrameAcquisition, SurfaceState},
 };
 use wgpu::{
-    Color, ColorTargetState, CommandEncoderDescriptor, Device, FragmentState, LoadOp, Operations,
-    PipelineLayoutDescriptor, PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor,
-    RenderPipeline, RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource, StoreOp,
-    TextureFormat, TextureViewDescriptor, VertexState,
+    BindGroupLayout, Color, ColorTargetState, CommandEncoderDescriptor, Device, FragmentState,
+    LoadOp, Operations, PipelineLayoutDescriptor, PrimitiveState, RenderPassColorAttachment,
+    RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, ShaderModuleDescriptor,
+    ShaderSource, StoreOp, TextureFormat, TextureViewDescriptor, VertexState,
 };
 use winit::{dpi::PhysicalSize, window::Window};
 
@@ -24,6 +26,7 @@ const CLEAR_COLOR: Color = Color {
 
 pub struct Renderer {
     surface: SurfaceState,
+    camera: CameraResources,
     render_pipeline: RenderPipeline,
     mesh: GpuMesh,
 }
@@ -38,11 +41,17 @@ pub enum RenderOutcome {
 impl Renderer {
     pub fn new(window: Arc<Window>) -> Result<Self, RendererError> {
         let surface = pollster::block_on(SurfaceState::new(window))?;
-        let render_pipeline = create_render_pipeline(surface.device(), surface.format());
+        let camera = CameraResources::new(surface.device(), surface.size());
+        let render_pipeline = create_render_pipeline(
+            surface.device(),
+            surface.format(),
+            camera.bind_group_layout(),
+        );
         let mesh = GpuMesh::quad(surface.device());
 
         Ok(Self {
             surface,
+            camera,
             render_pipeline,
             mesh,
         })
@@ -50,6 +59,7 @@ impl Renderer {
 
     pub fn resize(&mut self, size: PhysicalSize<u32>) {
         self.surface.resize(size);
+        self.camera.resize(self.surface.queue(), size);
     }
 
     pub fn render(&mut self) -> Result<RenderOutcome, RendererError> {
@@ -84,6 +94,7 @@ impl Renderer {
                 ..Default::default()
             });
             render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.set_bind_group(0, self.camera.bind_group(), &[]);
             self.mesh.draw(&mut render_pass);
         }
 
@@ -93,14 +104,18 @@ impl Renderer {
     }
 }
 
-fn create_render_pipeline(device: &Device, surface_format: TextureFormat) -> RenderPipeline {
+fn create_render_pipeline(
+    device: &Device,
+    surface_format: TextureFormat,
+    camera_bind_group_layout: &BindGroupLayout,
+) -> RenderPipeline {
     let shader = device.create_shader_module(ShaderModuleDescriptor {
         label: Some("Orbis geometry shader"),
         source: ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
     });
     let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("Orbis render pipeline layout"),
-        bind_group_layouts: &[],
+        bind_group_layouts: &[Some(camera_bind_group_layout)],
         immediate_size: 0,
     });
 

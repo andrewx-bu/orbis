@@ -63,6 +63,14 @@ impl SurfaceState {
         &self.device
     }
 
+    pub(super) fn queue(&self) -> &Queue {
+        &self.queue
+    }
+
+    pub(super) fn size(&self) -> PhysicalSize<u32> {
+        self.size
+    }
+
     pub(super) fn format(&self) -> wgpu::TextureFormat {
         self.config.format
     }

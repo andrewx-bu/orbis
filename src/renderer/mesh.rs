@@ -6,27 +6,27 @@ use wgpu::{
 };
 
 const QUAD_VERTICES: &[Vertex] = &[
-    Vertex::new([-0.6, 0.6], [0.9, 0.2, 0.2]),
-    Vertex::new([-0.6, -0.6], [0.2, 0.9, 0.3]),
-    Vertex::new([0.6, -0.6], [0.2, 0.4, 1.0]),
-    Vertex::new([0.6, 0.6], [0.9, 0.8, 0.2]),
+    Vertex::new([-0.6, 0.6, 0.0], [0.9, 0.2, 0.2]),
+    Vertex::new([-0.6, -0.6, 0.0], [0.2, 0.9, 0.3]),
+    Vertex::new([0.6, -0.6, 0.0], [0.2, 0.4, 1.0]),
+    Vertex::new([0.6, 0.6, 0.0], [0.9, 0.8, 0.2]),
 ];
 const QUAD_INDICES: &[u16] = &[0, 1, 2, 0, 2, 3];
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub(super) struct Vertex {
-    position: [f32; 2],
+    position: [f32; 3],
     color: [f32; 3],
 }
 
 impl Vertex {
     const ATTRIBUTES: [VertexAttribute; 2] = wgpu::vertex_attr_array![
-        0 => Float32x2,
+        0 => Float32x3,
         1 => Float32x3,
     ];
 
-    const fn new(position: [f32; 2], color: [f32; 3]) -> Self {
+    const fn new(position: [f32; 3], color: [f32; 3]) -> Self {
         Self { position, color }
     }
 
@@ -91,13 +91,13 @@ mod tests {
             panic!("vertex layout must contain position and color attributes");
         };
 
-        assert_eq!(layout.array_stride, 20);
+        assert_eq!(layout.array_stride, 24);
         assert_eq!(layout.step_mode, VertexStepMode::Vertex);
-        assert_eq!(position.format, wgpu::VertexFormat::Float32x2);
+        assert_eq!(position.format, wgpu::VertexFormat::Float32x3);
         assert_eq!(position.offset, 0);
         assert_eq!(position.shader_location, 0);
         assert_eq!(color.format, wgpu::VertexFormat::Float32x3);
-        assert_eq!(color.offset, 8);
+        assert_eq!(color.offset, 12);
         assert_eq!(color.shader_location, 1);
 
         assert_eq!(QUAD_VERTICES.len(), 4);

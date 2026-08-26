@@ -3,22 +3,16 @@ struct VertexOutput {
     @location(0) color: vec3f,
 }
 
-@vertex
-fn vertex_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-    let positions = array(
-        vec2f(0.0, 0.6),
-        vec2f(-0.6, -0.6),
-        vec2f(0.6, -0.6),
-    );
-    let colors = array(
-        vec3f(0.9, 0.2, 0.2),
-        vec3f(0.2, 0.9, 0.3),
-        vec3f(0.2, 0.4, 1.0),
-    );
+struct VertexInput {
+    @location(0) position: vec2f,
+    @location(1) color: vec3f,
+}
 
+@vertex
+fn vertex_main(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
-    output.position = vec4f(positions[vertex_index], 0.0, 1.0);
-    output.color = colors[vertex_index];
+    output.position = vec4f(input.position, 0.0, 1.0);
+    output.color = input.color;
     return output;
 }
 

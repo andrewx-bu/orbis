@@ -18,6 +18,8 @@ Keep implementations simple and observable while the rendering foundation is sti
 │   └── pull_request_template.md  # Pull request description format
 ├── src/
 │   ├── app.rs                    # Native application and window lifecycle
+│   ├── app/
+│   │   └── input.rs              # Mouse gesture state and input normalization
 │   ├── main.rs                   # Executable entry point
 │   └── renderer/
 │       ├── camera.rs             # Camera transforms and GPU uniforms
@@ -37,6 +39,7 @@ Keep implementations simple and observable while the rendering foundation is sti
 
 Keep `src/main.rs` limited to process startup and top-level error propagation.
 Keep native event-loop and window-lifecycle behavior in `src/app.rs`.
+Keep mouse gesture state and device-specific input normalization in `src/app/input.rs`.
 Keep camera projection, view transforms, and camera uniform resources in `src/renderer/camera.rs`.
 Keep GPU mesh data, vertex layouts, buffer ownership, and indexed drawing in `src/renderer/mesh.rs`.
 Keep high-level rendering behavior in `src/renderer/mod.rs`.

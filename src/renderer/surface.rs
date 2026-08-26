@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
-use super::RendererError;
+use super::{DEPTH_FORMAT, RendererError};
 use wgpu::{
-    CommandBuffer, CurrentSurfaceTexture, Device, DeviceDescriptor, Instance, Queue,
+    CommandBuffer, CurrentSurfaceTexture, Device, DeviceDescriptor, Extent3d, Instance, Queue,
     RequestAdapterOptions, Surface, SurfaceConfiguration, SurfaceTexture, Texture,
+    TextureDescriptor, TextureDimension, TextureUsages, TextureView, TextureViewDescriptor,
 };
 use winit::{dpi::PhysicalSize, window::Window};
 
@@ -17,6 +18,7 @@ pub(super) struct SurfaceState {
     device: Device,
     queue: Queue,
     config: SurfaceConfiguration,
+    depth_view: TextureView,
     size: PhysicalSize<u32>,
 }
 
@@ -46,6 +48,7 @@ impl SurfaceState {
             .ok_or_else(RendererError::unsupported_surface)?;
 
         surface.configure(&device, &config);
+        let depth_view = create_depth_view(&device, config.width, config.height);
 
         Ok(Self {
             window,
@@ -55,6 +58,7 @@ impl SurfaceState {
             device,
             queue,
             config,
+            depth_view,
             size,
         })
     }
@@ -75,6 +79,10 @@ impl SurfaceState {
         self.config.format
     }
 
+    pub(super) fn depth_view(&self) -> &TextureView {
+        &self.depth_view
+    }
+
     pub(super) fn resize(&mut self, size: PhysicalSize<u32>) {
         self.size = size;
 
@@ -85,6 +93,7 @@ impl SurfaceState {
         self.config.width = size.width;
         self.config.height = size.height;
         self.configure();
+        self.depth_view = create_depth_view(&self.device, size.width, size.height);
     }
 
     pub(super) fn acquire_frame(&mut self) -> Result<FrameAcquisition, RendererError> {
@@ -165,6 +174,25 @@ impl SurfaceState {
 
         Ok(())
     }
+}
+
+fn create_depth_view(device: &Device, width: u32, height: u32) -> TextureView {
+    device
+        .create_texture(&TextureDescriptor {
+            label: Some("Orbis depth texture"),
+            size: Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        })
+        .create_view(&TextureViewDescriptor::default())
 }
 
 pub(super) enum FrameAcquisition {

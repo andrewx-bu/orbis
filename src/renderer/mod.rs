@@ -10,10 +10,12 @@ use self::{
     surface::{FrameAcquisition, SurfaceState},
 };
 use wgpu::{
-    BindGroupLayout, Color, ColorTargetState, CommandEncoderDescriptor, Device, FragmentState,
-    LoadOp, Operations, PipelineLayoutDescriptor, PrimitiveState, RenderPassColorAttachment,
-    RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, ShaderModuleDescriptor,
-    ShaderSource, StoreOp, TextureFormat, TextureViewDescriptor, VertexState,
+    BindGroupLayout, Color, ColorTargetState, CommandEncoderDescriptor, CompareFunction,
+    DepthBiasState, DepthStencilState, Device, FragmentState, LoadOp, Operations,
+    PipelineLayoutDescriptor, PrimitiveState, RenderPassColorAttachment,
+    RenderPassDepthStencilAttachment, RenderPassDescriptor, RenderPipeline,
+    RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource, StencilState, StoreOp,
+    TextureFormat, TextureViewDescriptor, VertexState,
 };
 use winit::{dpi::PhysicalSize, window::Window};
 
@@ -23,6 +25,7 @@ const CLEAR_COLOR: Color = Color {
     b: 0.4,
     a: 1.0,
 };
+const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32Float;
 
 pub struct Renderer {
     surface: SurfaceState,
@@ -47,7 +50,7 @@ impl Renderer {
             surface.format(),
             camera.bind_group_layout(),
         );
-        let mesh = GpuMesh::quad(surface.device());
+        let mesh = GpuMesh::cube(surface.device());
 
         Ok(Self {
             surface,
@@ -88,9 +91,18 @@ impl Renderer {
                     store: StoreOp::Store,
                 },
             };
+            let depth_stencil_attachment = RenderPassDepthStencilAttachment {
+                view: self.surface.depth_view(),
+                depth_ops: Some(Operations {
+                    load: LoadOp::Clear(1.0),
+                    store: StoreOp::Discard,
+                }),
+                stencil_ops: None,
+            };
             let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("Orbis render pass"),
                 color_attachments: &[Some(color_attachment)],
+                depth_stencil_attachment: Some(depth_stencil_attachment),
                 ..Default::default()
             });
             render_pass.set_pipeline(&self.render_pipeline);
@@ -129,7 +141,13 @@ fn create_render_pipeline(
             compilation_options: Default::default(),
         },
         primitive: PrimitiveState::default(),
-        depth_stencil: None,
+        depth_stencil: Some(DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(CompareFunction::Less),
+            stencil: StencilState::default(),
+            bias: DepthBiasState::default(),
+        }),
         multisample: Default::default(),
         fragment: Some(FragmentState {
             module: &shader,

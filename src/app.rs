@@ -1,10 +1,13 @@
+mod input;
+
 use std::{error::Error, sync::Arc};
 
+use self::input::{OrbitInput, scroll_amount};
 use crate::renderer::{RenderOutcome, Renderer, RendererError};
 use winit::{
     application::ApplicationHandler,
     dpi::{LogicalSize, PhysicalSize},
-    event::WindowEvent,
+    event::{DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     window::{Window, WindowId},
 };
@@ -22,6 +25,7 @@ struct App {
 struct WindowState {
     window: Arc<Window>,
     renderer: Renderer,
+    orbit_input: OrbitInput,
     initial_redraw_pending: bool,
 }
 
@@ -36,6 +40,7 @@ impl WindowState {
         Ok(Self {
             window,
             renderer,
+            orbit_input: OrbitInput::default(),
             initial_redraw_pending: true,
         })
     }
@@ -58,6 +63,33 @@ impl WindowState {
     fn resize(&mut self, size: PhysicalSize<u32>) {
         self.renderer.resize(size);
         self.request_redraw();
+    }
+
+    fn mouse_button(&mut self, state: ElementState, button: MouseButton) {
+        self.orbit_input.mouse_button(state, button);
+    }
+
+    fn mouse_motion(&mut self, delta: (f64, f64)) {
+        let Some((delta_x, delta_y)) = self.orbit_input.mouse_motion(delta) else {
+            return;
+        };
+
+        if self.renderer.orbit_camera(delta_x, delta_y) {
+            self.request_redraw();
+        }
+    }
+
+    fn mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        if self
+            .renderer
+            .zoom_camera(scroll_amount(delta, self.window.scale_factor()))
+        {
+            self.request_redraw();
+        }
+    }
+
+    fn reset_orbit_input(&mut self) {
+        self.orbit_input.reset();
     }
 
     fn render(&mut self) -> Result<(), RendererError> {
@@ -117,6 +149,13 @@ impl ApplicationHandler for App {
             WindowEvent::Focused(true) | WindowEvent::Occluded(false) => {
                 window_state.request_redraw();
             }
+            WindowEvent::Focused(false) | WindowEvent::CursorLeft { .. } => {
+                window_state.reset_orbit_input();
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                window_state.mouse_button(state, button);
+            }
+            WindowEvent::MouseWheel { delta, .. } => window_state.mouse_wheel(delta),
             WindowEvent::Resized(size) => window_state.resize(size),
             WindowEvent::RedrawRequested => {
                 if let Err(error) = window_state.render() {
@@ -124,6 +163,21 @@ impl ApplicationHandler for App {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
+        let Some(window_state) = self.window_state.as_mut() else {
+            return;
+        };
+
+        if let DeviceEvent::MouseMotion { delta } = event {
+            window_state.mouse_motion(delta);
         }
     }
 }

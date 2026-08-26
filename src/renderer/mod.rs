@@ -9,6 +9,7 @@ use self::{
     mesh::{GpuMesh, Vertex},
     surface::{FrameAcquisition, SurfaceState},
 };
+use glam::Vec2;
 use wgpu::{
     BindGroupLayout, Color, ColorTargetState, CommandEncoderDescriptor, CompareFunction,
     DepthBiasState, DepthStencilState, Device, FragmentState, LoadOp, Operations,
@@ -63,6 +64,15 @@ impl Renderer {
     pub fn resize(&mut self, size: PhysicalSize<u32>) {
         self.surface.resize(size);
         self.camera.resize(self.surface.queue(), size);
+    }
+
+    pub fn orbit_camera(&mut self, delta_x: f32, delta_y: f32) -> bool {
+        self.camera
+            .orbit(self.surface.queue(), Vec2::new(delta_x, delta_y))
+    }
+
+    pub fn zoom_camera(&mut self, scroll_amount: f32) -> bool {
+        self.camera.zoom(self.surface.queue(), scroll_amount)
     }
 
     pub fn render(&mut self) -> Result<RenderOutcome, RendererError> {

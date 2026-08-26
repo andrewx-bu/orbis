@@ -47,7 +47,7 @@ impl Renderer {
             surface.format(),
             camera.bind_group_layout(),
         );
-        let mesh = GpuMesh::quad(surface.device());
+        let mesh = GpuMesh::cube(surface.device());
 
         Ok(Self {
             surface,

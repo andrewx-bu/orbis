@@ -5,13 +5,24 @@ use wgpu::{
     util::{BufferInitDescriptor, DeviceExt},
 };
 
-const QUAD_VERTICES: &[Vertex] = &[
-    Vertex::new([-0.6, 0.6, 0.0], [0.9, 0.2, 0.2]),
-    Vertex::new([-0.6, -0.6, 0.0], [0.2, 0.9, 0.3]),
-    Vertex::new([0.6, -0.6, 0.0], [0.2, 0.4, 1.0]),
-    Vertex::new([0.6, 0.6, 0.0], [0.9, 0.8, 0.2]),
+const CUBE_VERTICES: &[Vertex] = &[
+    Vertex::new([-0.6, -0.6, 0.6], [0.9, 0.2, 0.2]),
+    Vertex::new([0.6, -0.6, 0.6], [0.2, 0.9, 0.3]),
+    Vertex::new([0.6, 0.6, 0.6], [0.2, 0.4, 1.0]),
+    Vertex::new([-0.6, 0.6, 0.6], [0.9, 0.8, 0.2]),
+    Vertex::new([-0.6, -0.6, -0.6], [0.5, 0.2, 0.9]),
+    Vertex::new([0.6, -0.6, -0.6], [0.2, 0.8, 0.9]),
+    Vertex::new([0.6, 0.6, -0.6], [0.9, 0.5, 0.2]),
+    Vertex::new([-0.6, 0.6, -0.6], [0.4, 0.9, 0.2]),
 ];
-const QUAD_INDICES: &[u16] = &[0, 1, 2, 0, 2, 3];
+const CUBE_INDICES: &[u16] = &[
+    0, 1, 2, 0, 2, 3, // Front
+    5, 4, 7, 5, 7, 6, // Back
+    4, 0, 3, 4, 3, 7, // Left
+    1, 5, 6, 1, 6, 2, // Right
+    3, 2, 6, 3, 6, 7, // Top
+    4, 5, 1, 4, 1, 0, // Bottom
+];
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -46,8 +57,8 @@ pub(super) struct GpuMesh {
 }
 
 impl GpuMesh {
-    pub(super) fn quad(device: &Device) -> Self {
-        Self::new(device, QUAD_VERTICES, QUAD_INDICES)
+    pub(super) fn cube(device: &Device) -> Self {
+        Self::new(device, CUBE_VERTICES, CUBE_INDICES)
     }
 
     fn new(device: &Device, vertices: &[Vertex], indices: &[u16]) -> Self {
@@ -85,7 +96,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn quad_mesh_matches_shader_contract() {
+    fn cube_mesh_matches_shader_contract() {
         let layout = Vertex::layout();
         let [position, color] = layout.attributes else {
             panic!("vertex layout must contain position and color attributes");
@@ -100,13 +111,13 @@ mod tests {
         assert_eq!(color.offset, 12);
         assert_eq!(color.shader_location, 1);
 
-        assert_eq!(QUAD_VERTICES.len(), 4);
-        assert_eq!(QUAD_INDICES.len(), 6);
-        assert_eq!(QUAD_INDICES.len() % 3, 0);
+        assert_eq!(CUBE_VERTICES.len(), 8);
+        assert_eq!(CUBE_INDICES.len(), 36);
+        assert_eq!(CUBE_INDICES.len() % 3, 0);
         assert!(
-            QUAD_INDICES
+            CUBE_INDICES
                 .iter()
-                .all(|&index| usize::from(index) < QUAD_VERTICES.len())
+                .all(|&index| usize::from(index) < CUBE_VERTICES.len())
         );
     }
 }

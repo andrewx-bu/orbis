@@ -37,7 +37,7 @@ const CUBE_VERTICES: &[Vertex] = &[
     Vertex::new([0.6, -0.6, 0.6], [0.2, 0.9, 0.3], [0.0, -1.0, 0.0]),
     Vertex::new([-0.6, -0.6, 0.6], [0.9, 0.2, 0.2], [0.0, -1.0, 0.0]),
 ];
-const CUBE_INDICES: &[u16] = &[
+const CUBE_INDICES: &[u32] = &[
     0, 1, 2, 0, 2, 3, // Front
     4, 5, 6, 4, 6, 7, // Back
     8, 9, 10, 8, 10, 11, // Left
@@ -89,7 +89,7 @@ impl GpuMesh {
         Self::new(device, CUBE_VERTICES, CUBE_INDICES)
     }
 
-    fn new(device: &Device, vertices: &[Vertex], indices: &[u16]) -> Self {
+    fn new(device: &Device, vertices: &[Vertex], indices: &[u32]) -> Self {
         let vertex_buffer = device.create_buffer_init(&BufferInitDescriptor {
             label: Some("Orbis mesh vertex buffer"),
             contents: bytemuck::cast_slice(vertices),
@@ -114,7 +114,7 @@ impl GpuMesh {
 
     pub(super) fn draw<'pass>(&'pass self, render_pass: &mut RenderPass<'pass>) {
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(self.index_buffer.slice(..), IndexFormat::Uint16);
+        render_pass.set_index_buffer(self.index_buffer.slice(..), IndexFormat::Uint32);
         render_pass.draw_indexed(0..self.index_count, 0, 0..1);
     }
 }
@@ -149,7 +149,7 @@ mod tests {
         assert!(
             CUBE_INDICES
                 .iter()
-                .all(|&index| usize::from(index) < CUBE_VERTICES.len())
+                .all(|&index| (index as usize) < CUBE_VERTICES.len())
         );
     }
 
@@ -164,9 +164,9 @@ mod tests {
         assert!(remainder.is_empty());
 
         for &[first, second, third] in triangles {
-            let first = &CUBE_VERTICES[usize::from(first)];
-            let second = &CUBE_VERTICES[usize::from(second)];
-            let third = &CUBE_VERTICES[usize::from(third)];
+            let first = &CUBE_VERTICES[first as usize];
+            let second = &CUBE_VERTICES[second as usize];
+            let third = &CUBE_VERTICES[third as usize];
             let first_position = Vec3::from_array(first.position);
             let second_position = Vec3::from_array(second.position);
             let third_position = Vec3::from_array(third.position);

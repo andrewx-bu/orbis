@@ -2,6 +2,7 @@ mod camera;
 mod lighting;
 mod mesh;
 mod surface;
+mod terrain;
 
 use std::{error::Error, fmt, sync::Arc};
 

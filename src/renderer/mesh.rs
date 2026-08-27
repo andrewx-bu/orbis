@@ -6,9 +6,13 @@ use wgpu::{
     util::{BufferInitDescriptor, DeviceExt},
 };
 
+use super::terrain::Terrain;
+
 const CUBE_SPHERE_RESOLUTION: u32 = 16;
 const CUBE_SPHERE_RADIUS: f32 = 0.6;
 const CUBE_SPHERE_COLOR: [f32; 3] = [0.2, 0.7, 0.35];
+const DEFAULT_TERRAIN_SEED: u32 = 0;
+const TERRAIN_MAX_ELEVATION: f32 = 0.0;
 const CUBE_FACES: [CubeFace; 6] = [
     CubeFace::new(Vec3::Z, Vec3::X, Vec3::Y),
     CubeFace::new(Vec3::NEG_Z, Vec3::NEG_X, Vec3::Y),
@@ -73,12 +77,8 @@ struct MeshData {
 }
 
 impl MeshData {
-    fn cube_sphere(resolution: u32, radius: f32) -> Self {
+    fn cube_sphere(resolution: u32, terrain: Terrain) -> Self {
         assert!(resolution > 0, "cube-sphere resolution must be positive");
-        assert!(
-            radius.is_finite() && radius > 0.0,
-            "cube-sphere radius must be finite and positive"
-        );
 
         let vertices_per_edge = resolution + 1;
         let vertices_per_face = vertices_per_edge * vertices_per_edge;
@@ -95,13 +95,13 @@ impl MeshData {
 
                 for column in 0..=resolution {
                     let horizontal = -1.0 + 2.0 * column as f32 / resolution as f32;
-                    let normal =
+                    let direction =
                         (face.normal + face.horizontal * horizontal + face.vertical * vertical)
                             .normalize();
                     vertices.push(Vertex::new(
-                        (normal * radius).to_array(),
+                        terrain.position(direction).to_array(),
                         CUBE_SPHERE_COLOR,
-                        normal.to_array(),
+                        terrain.normal(direction).to_array(),
                     ));
                 }
             }
@@ -129,7 +129,12 @@ pub(super) struct GpuMesh {
 
 impl GpuMesh {
     pub(super) fn cube_sphere(device: &Device) -> Self {
-        let mesh = MeshData::cube_sphere(CUBE_SPHERE_RESOLUTION, CUBE_SPHERE_RADIUS);
+        let terrain = Terrain::new(
+            DEFAULT_TERRAIN_SEED,
+            CUBE_SPHERE_RADIUS,
+            TERRAIN_MAX_ELEVATION,
+        );
+        let mesh = MeshData::cube_sphere(CUBE_SPHERE_RESOLUTION, terrain);
         Self::new(device, &mesh.vertices, &mesh.indices)
     }
 
@@ -190,7 +195,7 @@ mod tests {
     #[test]
     fn cube_sphere_has_expected_face_geometry() {
         const RESOLUTION: u32 = 4;
-        let mesh = MeshData::cube_sphere(RESOLUTION, 2.5);
+        let mesh = MeshData::cube_sphere(RESOLUTION, Terrain::new(0, 2.5, 0.0));
         let vertices_per_face = ((RESOLUTION + 1) * (RESOLUTION + 1)) as usize;
         let indices_per_face = (RESOLUTION * RESOLUTION * 6) as usize;
 
@@ -218,7 +223,7 @@ mod tests {
     #[test]
     fn cube_sphere_vertices_have_the_requested_radius_and_outward_normals() {
         const RADIUS: f32 = 2.5;
-        let mesh = MeshData::cube_sphere(4, RADIUS);
+        let mesh = MeshData::cube_sphere(4, Terrain::new(0, RADIUS, 0.0));
 
         assert!(mesh.vertices.iter().all(|vertex| {
             let position = Vec3::from_array(vertex.position);
@@ -233,7 +238,7 @@ mod tests {
 
     #[test]
     fn cube_sphere_triangles_have_outward_winding() {
-        let mesh = MeshData::cube_sphere(4, 2.5);
+        let mesh = MeshData::cube_sphere(4, Terrain::new(0, 2.5, 0.0));
 
         let (triangles, remainder) = mesh.indices.as_chunks::<3>();
         assert!(remainder.is_empty());

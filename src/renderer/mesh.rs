@@ -1,50 +1,16 @@
 use bytemuck::{Pod, Zeroable};
-use glam::Vec3;
 use wgpu::{
     Buffer, BufferAddress, BufferUsages, Device, IndexFormat, RenderPass, VertexAttribute,
     VertexBufferLayout, VertexStepMode,
     util::{BufferInitDescriptor, DeviceExt},
 };
 
-use super::terrain::Terrain;
-
-const CUBE_SPHERE_RESOLUTION: u32 = 64;
-const CUBE_SPHERE_RADIUS: f32 = 0.6;
-const CUBE_SPHERE_COLOR: [f32; 3] = [0.2, 0.7, 0.35];
-const DEFAULT_TERRAIN_SEED: u32 = 0;
-const TERRAIN_MAX_ELEVATION: f32 = 0.08;
-const CUBE_FACES: [CubeFace; 6] = [
-    CubeFace::new(Vec3::Z, Vec3::X, Vec3::Y),
-    CubeFace::new(Vec3::NEG_Z, Vec3::NEG_X, Vec3::Y),
-    CubeFace::new(Vec3::NEG_X, Vec3::Z, Vec3::Y),
-    CubeFace::new(Vec3::X, Vec3::NEG_Z, Vec3::Y),
-    CubeFace::new(Vec3::Y, Vec3::X, Vec3::NEG_Z),
-    CubeFace::new(Vec3::NEG_Y, Vec3::X, Vec3::Z),
-];
-
-#[derive(Clone, Copy)]
-struct CubeFace {
-    normal: Vec3,
-    horizontal: Vec3,
-    vertical: Vec3,
-}
-
-impl CubeFace {
-    const fn new(normal: Vec3, horizontal: Vec3, vertical: Vec3) -> Self {
-        Self {
-            normal,
-            horizontal,
-            vertical,
-        }
-    }
-}
-
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub(super) struct Vertex {
-    position: [f32; 3],
-    color: [f32; 3],
-    normal: [f32; 3],
+    pub(super) position: [f32; 3],
+    pub(super) color: [f32; 3],
+    pub(super) normal: [f32; 3],
 }
 
 impl Vertex {
@@ -54,7 +20,7 @@ impl Vertex {
         2 => Float32x3,
     ];
 
-    const fn new(position: [f32; 3], color: [f32; 3], normal: [f32; 3]) -> Self {
+    pub(super) const fn new(position: [f32; 3], color: [f32; 3], normal: [f32; 3]) -> Self {
         Self {
             position,
             color,
@@ -71,52 +37,13 @@ impl Vertex {
     }
 }
 
-struct MeshData {
-    vertices: Vec<Vertex>,
-    indices: Vec<u32>,
+pub(super) struct MeshData {
+    pub(super) vertices: Vec<Vertex>,
+    pub(super) indices: Vec<u32>,
 }
 
 impl MeshData {
-    fn cube_sphere(resolution: u32, terrain: Terrain) -> Self {
-        assert!(resolution > 0, "cube-sphere resolution must be positive");
-
-        let vertices_per_edge = resolution + 1;
-        let vertices_per_face = vertices_per_edge * vertices_per_edge;
-        let indices_per_face = resolution * resolution * 6;
-        let mut vertices = Vec::with_capacity((vertices_per_face * 6) as usize);
-        let mut indices = Vec::with_capacity((indices_per_face * 6) as usize);
-
-        for face in CUBE_FACES {
-            let face_start = u32::try_from(vertices.len())
-                .expect("cube-sphere vertex count exceeds the supported u32 range");
-
-            for row in 0..=resolution {
-                let vertical = -1.0 + 2.0 * row as f32 / resolution as f32;
-
-                for column in 0..=resolution {
-                    let horizontal = -1.0 + 2.0 * column as f32 / resolution as f32;
-                    let direction =
-                        (face.normal + face.horizontal * horizontal + face.vertical * vertical)
-                            .normalize();
-                    vertices.push(Vertex::new(
-                        terrain.position(direction).to_array(),
-                        CUBE_SPHERE_COLOR,
-                        terrain.normal(direction).to_array(),
-                    ));
-                }
-            }
-
-            for row in 0..resolution {
-                for column in 0..resolution {
-                    let first = face_start + row * vertices_per_edge + column;
-                    let second = first + 1;
-                    let fourth = first + vertices_per_edge;
-                    let third = fourth + 1;
-                    indices.extend_from_slice(&[first, second, third, first, third, fourth]);
-                }
-            }
-        }
-
+    pub(super) fn new(vertices: Vec<Vertex>, indices: Vec<u32>) -> Self {
         Self { vertices, indices }
     }
 }
@@ -128,28 +55,19 @@ pub(super) struct GpuMesh {
 }
 
 impl GpuMesh {
-    pub(super) fn cube_sphere(device: &Device) -> Self {
-        let terrain = Terrain::new(
-            DEFAULT_TERRAIN_SEED,
-            CUBE_SPHERE_RADIUS,
-            TERRAIN_MAX_ELEVATION,
-        );
-        let mesh = MeshData::cube_sphere(CUBE_SPHERE_RESOLUTION, terrain);
-        Self::new(device, &mesh.vertices, &mesh.indices)
-    }
-
-    fn new(device: &Device, vertices: &[Vertex], indices: &[u32]) -> Self {
+    pub(super) fn new(device: &Device, mesh: &MeshData) -> Self {
         let vertex_buffer = device.create_buffer_init(&BufferInitDescriptor {
             label: Some("Orbis mesh vertex buffer"),
-            contents: bytemuck::cast_slice(vertices),
+            contents: bytemuck::cast_slice(&mesh.vertices),
             usage: BufferUsages::VERTEX,
         });
         let index_buffer = device.create_buffer_init(&BufferInitDescriptor {
             label: Some("Orbis mesh index buffer"),
-            contents: bytemuck::cast_slice(indices),
+            contents: bytemuck::cast_slice(&mesh.indices),
             usage: BufferUsages::INDEX,
         });
-        let index_count = indices
+        let index_count = mesh
+            .indices
             .len()
             .try_into()
             .expect("mesh index count exceeds the supported u32 range");
@@ -190,126 +108,5 @@ mod tests {
         assert_eq!(normal.format, wgpu::VertexFormat::Float32x3);
         assert_eq!(normal.offset, 24);
         assert_eq!(normal.shader_location, 2);
-    }
-
-    #[test]
-    fn cube_sphere_has_expected_face_geometry() {
-        const RESOLUTION: u32 = 4;
-        let mesh = MeshData::cube_sphere(RESOLUTION, Terrain::new(0, 2.5, 0.0));
-        let vertices_per_face = ((RESOLUTION + 1) * (RESOLUTION + 1)) as usize;
-        let indices_per_face = (RESOLUTION * RESOLUTION * 6) as usize;
-
-        assert_eq!(mesh.vertices.len(), vertices_per_face * CUBE_FACES.len());
-        assert_eq!(mesh.indices.len(), indices_per_face * CUBE_FACES.len());
-        assert!(
-            mesh.indices
-                .iter()
-                .all(|&index| (index as usize) < mesh.vertices.len())
-        );
-
-        for face_index in 0..CUBE_FACES.len() {
-            let vertex_start = face_index * vertices_per_face;
-            let vertex_end = vertex_start + vertices_per_face;
-            let index_start = face_index * indices_per_face;
-            let index_end = index_start + indices_per_face;
-
-            assert!(mesh.indices[index_start..index_end].iter().all(|&index| {
-                let index = index as usize;
-                (vertex_start..vertex_end).contains(&index)
-            }));
-        }
-    }
-
-    #[test]
-    fn cube_sphere_vertices_follow_terrain_radius_and_normals() {
-        const RADIUS: f32 = 2.5;
-        const MAX_ELEVATION: f32 = 0.2;
-        let mesh = MeshData::cube_sphere(8, Terrain::new(0, RADIUS, MAX_ELEVATION));
-
-        assert!(mesh.vertices.iter().all(|vertex| {
-            let position = Vec3::from_array(vertex.position);
-            let normal = Vec3::from_array(vertex.normal);
-            position.is_finite()
-                && ((RADIUS - MAX_ELEVATION)..=(RADIUS + MAX_ELEVATION))
-                    .contains(&position.length())
-                && normal.is_finite()
-                && normal.is_normalized()
-                && normal.dot(position.normalize()) > 0.0
-        }));
-    }
-
-    #[test]
-    fn cube_sphere_triangles_have_outward_winding() {
-        let mesh = MeshData::cube_sphere(8, Terrain::new(0, 2.5, 0.2));
-
-        let (triangles, remainder) = mesh.indices.as_chunks::<3>();
-        assert!(remainder.is_empty());
-
-        for &[first, second, third] in triangles {
-            let first = &mesh.vertices[first as usize];
-            let second = &mesh.vertices[second as usize];
-            let third = &mesh.vertices[third as usize];
-            let first_position = Vec3::from_array(first.position);
-            let second_position = Vec3::from_array(second.position);
-            let third_position = Vec3::from_array(third.position);
-            let winding_normal = (second_position - first_position)
-                .cross(third_position - first_position)
-                .normalize();
-
-            for vertex in [first, second, third] {
-                let normal = Vec3::from_array(vertex.normal);
-                assert!(
-                    winding_normal.dot(normal) > 0.0,
-                    "expected {winding_normal:?} to face outward with {normal:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn cube_sphere_face_boundaries_share_positions_and_normals() {
-        const RESOLUTION: u32 = 8;
-        let mesh = MeshData::cube_sphere(RESOLUTION, Terrain::new(0, 2.5, 0.2));
-        let vertices_per_edge = (RESOLUTION + 1) as usize;
-        let vertices_per_face = vertices_per_edge * vertices_per_edge;
-
-        for face_index in 0..CUBE_FACES.len() {
-            for row in 0..vertices_per_edge {
-                for column in 0..vertices_per_edge {
-                    if row != 0
-                        && row != vertices_per_edge - 1
-                        && column != 0
-                        && column != vertices_per_edge - 1
-                    {
-                        continue;
-                    }
-
-                    let index = face_index * vertices_per_face + row * vertices_per_edge + column;
-                    let vertex = &mesh.vertices[index];
-                    let direction = Vec3::from_array(vertex.position).normalize();
-                    let matching_vertex = mesh
-                        .vertices
-                        .chunks_exact(vertices_per_face)
-                        .enumerate()
-                        .filter(|(other_face_index, _)| *other_face_index != face_index)
-                        .flat_map(|(_, vertices)| vertices)
-                        .find(|other| {
-                            Vec3::from_array(other.position)
-                                .normalize()
-                                .abs_diff_eq(direction, 1.0e-6)
-                        })
-                        .expect("each face-boundary vertex must belong to another face");
-
-                    assert!(
-                        Vec3::from_array(matching_vertex.position)
-                            .abs_diff_eq(Vec3::from_array(vertex.position), 1.0e-5)
-                    );
-                    assert!(
-                        Vec3::from_array(matching_vertex.normal)
-                            .abs_diff_eq(Vec3::from_array(vertex.normal), 1.0e-5)
-                    );
-                }
-            }
-        }
     }
 }

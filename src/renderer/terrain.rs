@@ -4,6 +4,7 @@ const OCTAVE_COUNT: usize = 5;
 const BASE_FREQUENCY: f32 = 2.0;
 const LACUNARITY: f32 = 2.0;
 const PERSISTENCE: f32 = 0.5;
+const NORMAL_SAMPLE_DISTANCE: f32 = 1.0e-3;
 pub(super) const MAX_RELATIVE_HEIGHT: f32 = 0.08;
 
 #[derive(Clone, Copy, Debug)]
@@ -23,6 +24,33 @@ impl Terrain {
         self.normalized_height(unit_direction) * radius * MAX_RELATIVE_HEIGHT
     }
 
+    pub(super) fn surface_position(self, unit_direction: Vec3, radius: f32) -> Vec3 {
+        unit_direction * (radius + self.height(unit_direction, radius))
+    }
+
+    pub(super) fn surface_normal(self, unit_direction: Vec3, radius: f32) -> Vec3 {
+        let tangent = unit_direction
+            .cross(least_aligned_axis(unit_direction))
+            .normalize();
+        let bitangent = unit_direction.cross(tangent).normalize();
+        let tangent_delta = self.directional_surface_delta(unit_direction, tangent, radius);
+        let bitangent_delta = self.directional_surface_delta(unit_direction, bitangent, radius);
+        let normal = tangent_delta.cross(bitangent_delta).normalize();
+
+        if normal.dot(unit_direction) < 0.0 {
+            -normal
+        } else {
+            normal
+        }
+    }
+
+    fn directional_surface_delta(self, unit_direction: Vec3, tangent: Vec3, radius: f32) -> Vec3 {
+        let before = (unit_direction - tangent * NORMAL_SAMPLE_DISTANCE).normalize();
+        let after = (unit_direction + tangent * NORMAL_SAMPLE_DISTANCE).normalize();
+
+        self.surface_position(after, radius) - self.surface_position(before, radius)
+    }
+
     fn normalized_height(self, unit_direction: Vec3) -> f32 {
         let mut frequency = BASE_FREQUENCY;
         let mut amplitude = 1.0;
@@ -37,6 +65,18 @@ impl Terrain {
         }
 
         height / amplitude_sum
+    }
+}
+
+fn least_aligned_axis(direction: Vec3) -> Vec3 {
+    let absolute = direction.abs();
+
+    if absolute.x <= absolute.y && absolute.x <= absolute.z {
+        Vec3::X
+    } else if absolute.y <= absolute.z {
+        Vec3::Y
+    } else {
+        Vec3::Z
     }
 }
 

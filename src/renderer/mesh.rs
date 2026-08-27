@@ -6,9 +6,14 @@ use wgpu::{
     util::{BufferInitDescriptor, DeviceExt},
 };
 
+#[cfg(test)]
+use super::terrain::MAX_RELATIVE_HEIGHT;
+use super::terrain::Terrain;
+
 const CUBE_SPHERE_RESOLUTION: u32 = 16;
 const CUBE_SPHERE_RADIUS: f32 = 0.6;
 const CUBE_SPHERE_COLOR: [f32; 3] = [0.2, 0.7, 0.35];
+const TERRAIN_SEED: u32 = 42;
 const CUBE_FACES: [CubeFace; 6] = [
     CubeFace::new(Vec3::Z, Vec3::X, Vec3::Y),
     CubeFace::new(Vec3::NEG_Z, Vec3::NEG_X, Vec3::Y),
@@ -85,6 +90,7 @@ impl MeshData {
         let indices_per_face = resolution * resolution * 6;
         let mut vertices = Vec::with_capacity((vertices_per_face * 6) as usize);
         let mut indices = Vec::with_capacity((indices_per_face * 6) as usize);
+        let terrain = Terrain::new(TERRAIN_SEED);
 
         for face in CUBE_FACES {
             let face_start = u32::try_from(vertices.len())
@@ -95,13 +101,13 @@ impl MeshData {
 
                 for column in 0..=resolution {
                     let horizontal = -1.0 + 2.0 * column as f32 / resolution as f32;
-                    let normal =
+                    let unit_direction =
                         (face.normal + face.horizontal * horizontal + face.vertical * vertical)
                             .normalize();
                     vertices.push(Vertex::new(
-                        (normal * radius).to_array(),
+                        terrain.surface_position(unit_direction, radius).to_array(),
                         CUBE_SPHERE_COLOR,
-                        normal.to_array(),
+                        terrain.surface_normal(unit_direction, radius).to_array(),
                     ));
                 }
             }
@@ -216,19 +222,47 @@ mod tests {
     }
 
     #[test]
-    fn cube_sphere_vertices_have_the_requested_radius_and_outward_normals() {
+    fn cube_sphere_vertices_have_bounded_terrain_and_outward_normals() {
         const RADIUS: f32 = 2.5;
         let mesh = MeshData::cube_sphere(4, RADIUS);
+        let minimum_radius = RADIUS * (1.0 - MAX_RELATIVE_HEIGHT);
+        let maximum_radius = RADIUS * (1.0 + MAX_RELATIVE_HEIGHT);
 
         assert!(mesh.vertices.iter().all(|vertex| {
             let position = Vec3::from_array(vertex.position);
             let normal = Vec3::from_array(vertex.normal);
             position.is_finite()
-                && (position.length() - RADIUS).abs() <= 1.0e-6
+                && (minimum_radius..=maximum_radius).contains(&position.length())
                 && normal.is_finite()
                 && normal.is_normalized()
-                && normal.abs_diff_eq(position.normalize(), 1.0e-6)
+                && normal.dot(position) > 0.0
         }));
+    }
+
+    #[test]
+    fn cube_sphere_face_boundaries_have_matching_positions_and_normals() {
+        const RESOLUTION: u32 = 4;
+        let mesh = MeshData::cube_sphere(RESOLUTION, 2.5);
+        let mut matching_pairs = 0;
+
+        for (index, first) in mesh.vertices.iter().enumerate() {
+            for second in &mesh.vertices[index + 1..] {
+                let first_position = Vec3::from_array(first.position);
+                let second_position = Vec3::from_array(second.position);
+
+                if first_position.abs_diff_eq(second_position, 1.0e-6) {
+                    matching_pairs += 1;
+                    assert!(
+                        Vec3::from_array(first.normal)
+                            .abs_diff_eq(Vec3::from_array(second.normal), 1.0e-6)
+                    );
+                }
+            }
+        }
+
+        let edge_pairs = 12 * (RESOLUTION - 1);
+        let corner_pairs = 8 * 3;
+        assert_eq!(matching_pairs, edge_pairs + corner_pairs);
     }
 
     #[test]

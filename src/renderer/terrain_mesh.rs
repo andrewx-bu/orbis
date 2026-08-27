@@ -115,12 +115,12 @@ struct PatchBounds {
 }
 
 fn generate_patch(resolution: u32, terrain: Terrain, patch: PatchId) -> MeshData {
-    let (vertices_per_edge, vertex_count, index_count) = patch_mesh_counts(resolution);
+    let counts = patch_mesh_counts(resolution);
     let face = patch.face.basis();
     let bounds = patch.bounds();
     validate_patch_spacing(bounds, resolution);
-    let mut vertices = Vec::with_capacity(vertex_count as usize);
-    let mut indices = Vec::with_capacity(index_count as usize);
+    let mut vertices = Vec::with_capacity(counts.vertex_count as usize);
+    let mut indices = Vec::with_capacity(counts.index_count as usize);
 
     for row in 0..=resolution {
         let vertical = axis_coordinate(
@@ -149,9 +149,9 @@ fn generate_patch(resolution: u32, terrain: Terrain, patch: PatchId) -> MeshData
 
     for row in 0..resolution {
         for column in 0..resolution {
-            let first = row * vertices_per_edge + column;
+            let first = row * counts.vertices_per_edge + column;
             let second = first + 1;
-            let fourth = first + vertices_per_edge;
+            let fourth = first + counts.vertices_per_edge;
             let third = fourth + 1;
             indices.extend_from_slice(&[first, second, third, first, third, fourth]);
         }
@@ -160,7 +160,13 @@ fn generate_patch(resolution: u32, terrain: Terrain, patch: PatchId) -> MeshData
     MeshData::new(vertices, indices)
 }
 
-fn patch_mesh_counts(resolution: u32) -> (u32, u32, u32) {
+struct PatchMeshCounts {
+    vertices_per_edge: u32,
+    vertex_count: u32,
+    index_count: u32,
+}
+
+fn patch_mesh_counts(resolution: u32) -> PatchMeshCounts {
     assert!(resolution > 0, "terrain patch resolution must be positive");
 
     let vertices_per_edge = resolution
@@ -174,7 +180,11 @@ fn patch_mesh_counts(resolution: u32) -> (u32, u32, u32) {
         .and_then(|quad_count| quad_count.checked_mul(6))
         .expect("terrain patch resolution exceeds the supported index count");
 
-    (vertices_per_edge, vertex_count, index_count)
+    PatchMeshCounts {
+        vertices_per_edge,
+        vertex_count,
+        index_count,
+    }
 }
 
 fn validate_patch_spacing(bounds: PatchBounds, resolution: u32) {

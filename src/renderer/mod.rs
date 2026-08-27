@@ -3,14 +3,16 @@ mod lighting;
 mod mesh;
 mod surface;
 mod terrain;
+mod terrain_mesh;
 
 use std::{error::Error, fmt, sync::Arc};
 
 use self::{
     camera::CameraResources,
     lighting::LightingResources,
-    mesh::{TerrainMesh, Vertex},
+    mesh::Vertex,
     surface::{FrameAcquisition, SurfaceState},
+    terrain_mesh::TerrainMesh,
 };
 use glam::Vec2;
 use wgpu::{

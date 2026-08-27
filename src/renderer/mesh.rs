@@ -6,9 +6,13 @@ use wgpu::{
     util::{BufferInitDescriptor, DeviceExt},
 };
 
-const CUBE_SPHERE_RESOLUTION: u32 = 16;
+use super::terrain::Terrain;
+
+const CUBE_SPHERE_RESOLUTION: u32 = 64;
 const CUBE_SPHERE_RADIUS: f32 = 0.6;
 const CUBE_SPHERE_COLOR: [f32; 3] = [0.2, 0.7, 0.35];
+const DEFAULT_TERRAIN_SEED: u32 = 0;
+const TERRAIN_MAX_ELEVATION: f32 = 0.08;
 const CUBE_FACES: [CubeFace; 6] = [
     CubeFace::new(Vec3::Z, Vec3::X, Vec3::Y),
     CubeFace::new(Vec3::NEG_Z, Vec3::NEG_X, Vec3::Y),
@@ -73,12 +77,8 @@ struct MeshData {
 }
 
 impl MeshData {
-    fn cube_sphere(resolution: u32, radius: f32) -> Self {
+    fn cube_sphere(resolution: u32, terrain: Terrain) -> Self {
         assert!(resolution > 0, "cube-sphere resolution must be positive");
-        assert!(
-            radius.is_finite() && radius > 0.0,
-            "cube-sphere radius must be finite and positive"
-        );
 
         let vertices_per_edge = resolution + 1;
         let vertices_per_face = vertices_per_edge * vertices_per_edge;
@@ -95,13 +95,13 @@ impl MeshData {
 
                 for column in 0..=resolution {
                     let horizontal = -1.0 + 2.0 * column as f32 / resolution as f32;
-                    let normal =
+                    let direction =
                         (face.normal + face.horizontal * horizontal + face.vertical * vertical)
                             .normalize();
                     vertices.push(Vertex::new(
-                        (normal * radius).to_array(),
+                        terrain.position(direction).to_array(),
                         CUBE_SPHERE_COLOR,
-                        normal.to_array(),
+                        terrain.normal(direction).to_array(),
                     ));
                 }
             }
@@ -129,7 +129,12 @@ pub(super) struct GpuMesh {
 
 impl GpuMesh {
     pub(super) fn cube_sphere(device: &Device) -> Self {
-        let mesh = MeshData::cube_sphere(CUBE_SPHERE_RESOLUTION, CUBE_SPHERE_RADIUS);
+        let terrain = Terrain::new(
+            DEFAULT_TERRAIN_SEED,
+            CUBE_SPHERE_RADIUS,
+            TERRAIN_MAX_ELEVATION,
+        );
+        let mesh = MeshData::cube_sphere(CUBE_SPHERE_RESOLUTION, terrain);
         Self::new(device, &mesh.vertices, &mesh.indices)
     }
 
@@ -190,7 +195,7 @@ mod tests {
     #[test]
     fn cube_sphere_has_expected_face_geometry() {
         const RESOLUTION: u32 = 4;
-        let mesh = MeshData::cube_sphere(RESOLUTION, 2.5);
+        let mesh = MeshData::cube_sphere(RESOLUTION, Terrain::new(0, 2.5, 0.0));
         let vertices_per_face = ((RESOLUTION + 1) * (RESOLUTION + 1)) as usize;
         let indices_per_face = (RESOLUTION * RESOLUTION * 6) as usize;
 
@@ -216,24 +221,26 @@ mod tests {
     }
 
     #[test]
-    fn cube_sphere_vertices_have_the_requested_radius_and_outward_normals() {
+    fn cube_sphere_vertices_follow_terrain_radius_and_normals() {
         const RADIUS: f32 = 2.5;
-        let mesh = MeshData::cube_sphere(4, RADIUS);
+        const MAX_ELEVATION: f32 = 0.2;
+        let mesh = MeshData::cube_sphere(8, Terrain::new(0, RADIUS, MAX_ELEVATION));
 
         assert!(mesh.vertices.iter().all(|vertex| {
             let position = Vec3::from_array(vertex.position);
             let normal = Vec3::from_array(vertex.normal);
             position.is_finite()
-                && (position.length() - RADIUS).abs() <= 1.0e-6
+                && ((RADIUS - MAX_ELEVATION)..=(RADIUS + MAX_ELEVATION))
+                    .contains(&position.length())
                 && normal.is_finite()
                 && normal.is_normalized()
-                && normal.abs_diff_eq(position.normalize(), 1.0e-6)
+                && normal.dot(position.normalize()) > 0.0
         }));
     }
 
     #[test]
     fn cube_sphere_triangles_have_outward_winding() {
-        let mesh = MeshData::cube_sphere(4, 2.5);
+        let mesh = MeshData::cube_sphere(8, Terrain::new(0, 2.5, 0.2));
 
         let (triangles, remainder) = mesh.indices.as_chunks::<3>();
         assert!(remainder.is_empty());
@@ -255,6 +262,53 @@ mod tests {
                     winding_normal.dot(normal) > 0.0,
                     "expected {winding_normal:?} to face outward with {normal:?}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn cube_sphere_face_boundaries_share_positions_and_normals() {
+        const RESOLUTION: u32 = 8;
+        let mesh = MeshData::cube_sphere(RESOLUTION, Terrain::new(0, 2.5, 0.2));
+        let vertices_per_edge = (RESOLUTION + 1) as usize;
+        let vertices_per_face = vertices_per_edge * vertices_per_edge;
+
+        for face_index in 0..CUBE_FACES.len() {
+            for row in 0..vertices_per_edge {
+                for column in 0..vertices_per_edge {
+                    if row != 0
+                        && row != vertices_per_edge - 1
+                        && column != 0
+                        && column != vertices_per_edge - 1
+                    {
+                        continue;
+                    }
+
+                    let index = face_index * vertices_per_face + row * vertices_per_edge + column;
+                    let vertex = &mesh.vertices[index];
+                    let direction = Vec3::from_array(vertex.position).normalize();
+                    let matching_vertex = mesh
+                        .vertices
+                        .chunks_exact(vertices_per_face)
+                        .enumerate()
+                        .filter(|(other_face_index, _)| *other_face_index != face_index)
+                        .flat_map(|(_, vertices)| vertices)
+                        .find(|other| {
+                            Vec3::from_array(other.position)
+                                .normalize()
+                                .abs_diff_eq(direction, 1.0e-6)
+                        })
+                        .expect("each face-boundary vertex must belong to another face");
+
+                    assert!(
+                        Vec3::from_array(matching_vertex.position)
+                            .abs_diff_eq(Vec3::from_array(vertex.position), 1.0e-5)
+                    );
+                    assert!(
+                        Vec3::from_array(matching_vertex.normal)
+                            .abs_diff_eq(Vec3::from_array(vertex.normal), 1.0e-5)
+                    );
+                }
             }
         }
     }

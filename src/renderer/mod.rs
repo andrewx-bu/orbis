@@ -2,6 +2,8 @@ mod camera;
 mod lighting;
 mod mesh;
 mod surface;
+#[cfg(test)]
+mod terrain;
 
 use std::{error::Error, fmt, sync::Arc};
 

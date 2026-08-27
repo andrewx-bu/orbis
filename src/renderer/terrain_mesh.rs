@@ -70,9 +70,7 @@ struct PatchId {
 
 impl PatchId {
     const fn new(face: CubeFace, level: u32, x: u32, y: u32) -> Self {
-        let Some(patches_per_edge) = 1_u32.checked_shl(level) else {
-            panic!("terrain patch level exceeds the supported range");
-        };
+        let patches_per_edge = patches_per_edge(level);
         assert!(
             x < patches_per_edge && y < patches_per_edge,
             "terrain patch coordinates must be within their level"
@@ -86,7 +84,7 @@ impl PatchId {
     }
 
     fn bounds(self) -> PatchBounds {
-        let patches_per_edge = 1_u32 << self.level;
+        let patches_per_edge = patches_per_edge(self.level);
         let width = 2.0 / patches_per_edge as f32;
         let minimum_horizontal = -1.0 + self.x as f32 * width;
         let minimum_vertical = -1.0 + self.y as f32 * width;
@@ -100,6 +98,14 @@ impl PatchId {
     }
 }
 
+const fn patches_per_edge(level: u32) -> u32 {
+    let Some(patches_per_edge) = 1_u32.checked_shl(level) else {
+        panic!("terrain patch level exceeds the supported range");
+    };
+
+    patches_per_edge
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct PatchBounds {
     minimum_horizontal: f32,
@@ -109,24 +115,28 @@ struct PatchBounds {
 }
 
 fn generate_patch(resolution: u32, terrain: Terrain, patch: PatchId) -> MeshData {
-    assert!(resolution > 0, "terrain patch resolution must be positive");
-
-    let vertices_per_edge = resolution + 1;
-    let vertex_count = vertices_per_edge * vertices_per_edge;
-    let index_count = resolution * resolution * 6;
-    let mut vertices = Vec::with_capacity(vertex_count as usize);
-    let mut indices = Vec::with_capacity(index_count as usize);
+    let (vertices_per_edge, vertex_count, index_count) = patch_mesh_counts(resolution);
     let face = patch.face.basis();
     let bounds = patch.bounds();
+    validate_patch_spacing(bounds, resolution);
+    let mut vertices = Vec::with_capacity(vertex_count as usize);
+    let mut indices = Vec::with_capacity(index_count as usize);
 
     for row in 0..=resolution {
-        let vertical = bounds.minimum_vertical
-            + (bounds.maximum_vertical - bounds.minimum_vertical) * row as f32 / resolution as f32;
+        let vertical = axis_coordinate(
+            bounds.minimum_vertical,
+            bounds.maximum_vertical,
+            row,
+            resolution,
+        );
 
         for column in 0..=resolution {
-            let horizontal = bounds.minimum_horizontal
-                + (bounds.maximum_horizontal - bounds.minimum_horizontal) * column as f32
-                    / resolution as f32;
+            let horizontal = axis_coordinate(
+                bounds.minimum_horizontal,
+                bounds.maximum_horizontal,
+                column,
+                resolution,
+            );
             let direction =
                 (face.normal + face.horizontal * horizontal + face.vertical * vertical).normalize();
             vertices.push(Vertex::new(
@@ -148,6 +158,45 @@ fn generate_patch(resolution: u32, terrain: Terrain, patch: PatchId) -> MeshData
     }
 
     MeshData::new(vertices, indices)
+}
+
+fn patch_mesh_counts(resolution: u32) -> (u32, u32, u32) {
+    assert!(resolution > 0, "terrain patch resolution must be positive");
+
+    let vertices_per_edge = resolution
+        .checked_add(1)
+        .expect("terrain patch resolution exceeds the supported vertex count");
+    let vertex_count = vertices_per_edge
+        .checked_mul(vertices_per_edge)
+        .expect("terrain patch resolution exceeds the supported vertex count");
+    let index_count = resolution
+        .checked_mul(resolution)
+        .and_then(|quad_count| quad_count.checked_mul(6))
+        .expect("terrain patch resolution exceeds the supported index count");
+
+    (vertices_per_edge, vertex_count, index_count)
+}
+
+fn validate_patch_spacing(bounds: PatchBounds, resolution: u32) {
+    for (minimum, maximum) in [
+        (bounds.minimum_horizontal, bounds.maximum_horizontal),
+        (bounds.minimum_vertical, bounds.maximum_vertical),
+    ] {
+        let mut previous = minimum;
+
+        for index in 1..=resolution {
+            let coordinate = axis_coordinate(minimum, maximum, index, resolution);
+            assert!(
+                coordinate > previous,
+                "terrain patch level and resolution exceed f32 coordinate precision"
+            );
+            previous = coordinate;
+        }
+    }
+}
+
+fn axis_coordinate(minimum: f32, maximum: f32, index: u32, resolution: u32) -> f32 {
+    minimum + (maximum - minimum) * index as f32 / resolution as f32
 }
 
 pub(super) struct TerrainMesh {
@@ -243,6 +292,43 @@ mod tests {
     #[should_panic(expected = "terrain patch coordinates must be within their level")]
     fn patch_coordinates_must_be_within_their_level() {
         PatchId::new(CubeFace::Front, 1, 2, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "terrain patch level exceeds the supported range")]
+    fn patch_bounds_reject_an_unsupported_level() {
+        PatchId {
+            face: CubeFace::Front,
+            level: u32::BITS,
+            x: 0,
+            y: 0,
+        }
+        .bounds();
+    }
+
+    #[test]
+    #[should_panic(expected = "terrain patch resolution exceeds the supported vertex count")]
+    fn terrain_patch_rejects_vertex_count_overflow() {
+        patch_mesh_counts(u32::MAX);
+    }
+
+    #[test]
+    #[should_panic(expected = "terrain patch resolution exceeds the supported index count")]
+    fn terrain_patch_rejects_index_count_overflow() {
+        patch_mesh_counts(30_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "terrain patch level and resolution exceed f32 coordinate precision")]
+    fn terrain_patch_rejects_collapsed_vertex_spacing() {
+        let level = 20;
+        let edge = patches_per_edge(level) - 1;
+
+        generate_patch(
+            PATCH_RESOLUTION,
+            Terrain::new(0, 2.5, 0.0),
+            PatchId::new(CubeFace::Front, level, edge, edge),
+        );
     }
 
     #[test]

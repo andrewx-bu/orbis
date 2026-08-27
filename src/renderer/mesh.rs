@@ -149,8 +149,6 @@ struct MeshData {
 
 impl MeshData {
     fn cube_sphere(resolution: u32, terrain: Terrain) -> Self {
-        assert!(resolution > 0, "cube-sphere resolution must be positive");
-
         let vertices_per_edge = resolution + 1;
         let vertices_per_face = vertices_per_edge * vertices_per_edge;
         let indices_per_face = resolution * resolution * 6;
@@ -158,40 +156,58 @@ impl MeshData {
         let mut indices = Vec::with_capacity((indices_per_face * 6) as usize);
 
         for face in CUBE_FACES {
-            let patch = PatchId::root(face);
-            let face = patch.face.basis();
-            let bounds = patch.bounds();
-            let face_start = u32::try_from(vertices.len())
+            let patch_mesh = Self::terrain_patch(resolution, terrain, PatchId::root(face));
+            let vertex_offset = u32::try_from(vertices.len())
                 .expect("cube-sphere vertex count exceeds the supported u32 range");
+            vertices.extend(patch_mesh.vertices);
+            indices.extend(patch_mesh.indices.into_iter().map(|index| {
+                index
+                    .checked_add(vertex_offset)
+                    .expect("cube-sphere index exceeds the supported u32 range")
+            }));
+        }
 
-            for row in 0..=resolution {
-                let vertical = bounds.minimum_vertical
-                    + (bounds.maximum_vertical - bounds.minimum_vertical) * row as f32
+        Self { vertices, indices }
+    }
+
+    fn terrain_patch(resolution: u32, terrain: Terrain, patch: PatchId) -> Self {
+        assert!(resolution > 0, "terrain patch resolution must be positive");
+
+        let vertices_per_edge = resolution + 1;
+        let vertex_count = vertices_per_edge * vertices_per_edge;
+        let index_count = resolution * resolution * 6;
+        let mut vertices = Vec::with_capacity(vertex_count as usize);
+        let mut indices = Vec::with_capacity(index_count as usize);
+        let face = patch.face.basis();
+        let bounds = patch.bounds();
+
+        for row in 0..=resolution {
+            let vertical = bounds.minimum_vertical
+                + (bounds.maximum_vertical - bounds.minimum_vertical) * row as f32
+                    / resolution as f32;
+
+            for column in 0..=resolution {
+                let horizontal = bounds.minimum_horizontal
+                    + (bounds.maximum_horizontal - bounds.minimum_horizontal) * column as f32
                         / resolution as f32;
-
-                for column in 0..=resolution {
-                    let horizontal = bounds.minimum_horizontal
-                        + (bounds.maximum_horizontal - bounds.minimum_horizontal) * column as f32
-                            / resolution as f32;
-                    let direction =
-                        (face.normal + face.horizontal * horizontal + face.vertical * vertical)
-                            .normalize();
-                    vertices.push(Vertex::new(
-                        terrain.position(direction).to_array(),
-                        CUBE_SPHERE_COLOR,
-                        terrain.normal(direction).to_array(),
-                    ));
-                }
+                let direction =
+                    (face.normal + face.horizontal * horizontal + face.vertical * vertical)
+                        .normalize();
+                vertices.push(Vertex::new(
+                    terrain.position(direction).to_array(),
+                    CUBE_SPHERE_COLOR,
+                    terrain.normal(direction).to_array(),
+                ));
             }
+        }
 
-            for row in 0..resolution {
-                for column in 0..resolution {
-                    let first = face_start + row * vertices_per_edge + column;
-                    let second = first + 1;
-                    let fourth = first + vertices_per_edge;
-                    let third = fourth + 1;
-                    indices.extend_from_slice(&[first, second, third, first, third, fourth]);
-                }
+        for row in 0..resolution {
+            for column in 0..resolution {
+                let first = row * vertices_per_edge + column;
+                let second = first + 1;
+                let fourth = first + vertices_per_edge;
+                let third = fourth + 1;
+                indices.extend_from_slice(&[first, second, third, first, third, fourth]);
             }
         }
 
@@ -354,6 +370,52 @@ mod tests {
                 let index = index as usize;
                 (vertex_start..vertex_end).contains(&index)
             }));
+        }
+    }
+
+    #[test]
+    fn terrain_patch_has_expected_geometry() {
+        const RESOLUTION: u32 = 4;
+        let mesh = MeshData::terrain_patch(
+            RESOLUTION,
+            Terrain::new(0, 2.5, 0.0),
+            PatchId::new(CubeFace::Top, 3, 4, 6),
+        );
+
+        assert_eq!(
+            mesh.vertices.len(),
+            ((RESOLUTION + 1) * (RESOLUTION + 1)) as usize
+        );
+        assert_eq!(mesh.indices.len(), (RESOLUTION * RESOLUTION * 6) as usize);
+        assert!(
+            mesh.indices
+                .iter()
+                .all(|&index| (index as usize) < mesh.vertices.len())
+        );
+    }
+
+    #[test]
+    fn sibling_patch_boundaries_share_positions_and_normals() {
+        const RESOLUTION: u32 = 8;
+        let terrain = Terrain::new(42, 2.5, 0.2);
+        let left =
+            MeshData::terrain_patch(RESOLUTION, terrain, PatchId::new(CubeFace::Front, 2, 1, 2));
+        let right =
+            MeshData::terrain_patch(RESOLUTION, terrain, PatchId::new(CubeFace::Front, 2, 2, 2));
+        let vertices_per_edge = (RESOLUTION + 1) as usize;
+
+        for row in 0..vertices_per_edge {
+            let left_vertex = &left.vertices[row * vertices_per_edge + RESOLUTION as usize];
+            let right_vertex = &right.vertices[row * vertices_per_edge];
+
+            assert!(
+                Vec3::from_array(left_vertex.position)
+                    .abs_diff_eq(Vec3::from_array(right_vertex.position), 1.0e-6)
+            );
+            assert!(
+                Vec3::from_array(left_vertex.normal)
+                    .abs_diff_eq(Vec3::from_array(right_vertex.normal), 1.0e-6)
+            );
         }
     }
 

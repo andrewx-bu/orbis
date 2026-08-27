@@ -148,28 +148,6 @@ struct MeshData {
 }
 
 impl MeshData {
-    fn cube_sphere(resolution: u32, terrain: Terrain) -> Self {
-        let vertices_per_edge = resolution + 1;
-        let vertices_per_face = vertices_per_edge * vertices_per_edge;
-        let indices_per_face = resolution * resolution * 6;
-        let mut vertices = Vec::with_capacity((vertices_per_face * 6) as usize);
-        let mut indices = Vec::with_capacity((indices_per_face * 6) as usize);
-
-        for face in CUBE_FACES {
-            let patch_mesh = Self::terrain_patch(resolution, terrain, PatchId::root(face));
-            let vertex_offset = u32::try_from(vertices.len())
-                .expect("cube-sphere vertex count exceeds the supported u32 range");
-            vertices.extend(patch_mesh.vertices);
-            indices.extend(patch_mesh.indices.into_iter().map(|index| {
-                index
-                    .checked_add(vertex_offset)
-                    .expect("cube-sphere index exceeds the supported u32 range")
-            }));
-        }
-
-        Self { vertices, indices }
-    }
-
     fn terrain_patch(resolution: u32, terrain: Terrain, patch: PatchId) -> Self {
         assert!(resolution > 0, "terrain patch resolution must be positive");
 
@@ -215,31 +193,21 @@ impl MeshData {
     }
 }
 
-pub(super) struct GpuMesh {
+struct GpuMesh {
     vertex_buffer: Buffer,
     index_buffer: Buffer,
     index_count: u32,
 }
 
 impl GpuMesh {
-    pub(super) fn cube_sphere(device: &Device) -> Self {
-        let terrain = Terrain::new(
-            DEFAULT_TERRAIN_SEED,
-            CUBE_SPHERE_RADIUS,
-            TERRAIN_MAX_ELEVATION,
-        );
-        let mesh = MeshData::cube_sphere(CUBE_SPHERE_RESOLUTION, terrain);
-        Self::new(device, &mesh.vertices, &mesh.indices)
-    }
-
     fn new(device: &Device, vertices: &[Vertex], indices: &[u32]) -> Self {
         let vertex_buffer = device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("Orbis mesh vertex buffer"),
+            label: Some("Orbis terrain patch vertex buffer"),
             contents: bytemuck::cast_slice(vertices),
             usage: BufferUsages::VERTEX,
         });
         let index_buffer = device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("Orbis mesh index buffer"),
+            label: Some("Orbis terrain patch index buffer"),
             contents: bytemuck::cast_slice(indices),
             usage: BufferUsages::INDEX,
         });
@@ -255,16 +223,53 @@ impl GpuMesh {
         }
     }
 
-    pub(super) fn draw<'pass>(&'pass self, render_pass: &mut RenderPass<'pass>) {
+    fn draw<'pass>(&'pass self, render_pass: &mut RenderPass<'pass>) {
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.set_index_buffer(self.index_buffer.slice(..), IndexFormat::Uint32);
         render_pass.draw_indexed(0..self.index_count, 0, 0..1);
     }
 }
 
+pub(super) struct TerrainMesh {
+    patches: Vec<GpuMesh>,
+}
+
+impl TerrainMesh {
+    pub(super) fn new(device: &Device) -> Self {
+        let terrain = Terrain::new(
+            DEFAULT_TERRAIN_SEED,
+            CUBE_SPHERE_RADIUS,
+            TERRAIN_MAX_ELEVATION,
+        );
+        let patches = CUBE_FACES
+            .into_iter()
+            .map(|face| {
+                let mesh =
+                    MeshData::terrain_patch(CUBE_SPHERE_RESOLUTION, terrain, PatchId::root(face));
+                GpuMesh::new(device, &mesh.vertices, &mesh.indices)
+            })
+            .collect();
+
+        Self { patches }
+    }
+
+    pub(super) fn draw<'pass>(&'pass self, render_pass: &mut RenderPass<'pass>) {
+        for patch in &self.patches {
+            patch.draw(render_pass);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn root_patch_meshes(resolution: u32, terrain: Terrain) -> Vec<MeshData> {
+        CUBE_FACES
+            .into_iter()
+            .map(|face| MeshData::terrain_patch(resolution, terrain, PatchId::root(face)))
+            .collect()
+    }
 
     #[test]
     fn root_patches_cover_each_cube_face() {
@@ -346,30 +351,21 @@ mod tests {
     }
 
     #[test]
-    fn cube_sphere_has_expected_face_geometry() {
+    fn root_patches_have_expected_geometry() {
         const RESOLUTION: u32 = 4;
-        let mesh = MeshData::cube_sphere(RESOLUTION, Terrain::new(0, 2.5, 0.0));
+        let meshes = root_patch_meshes(RESOLUTION, Terrain::new(0, 2.5, 0.0));
         let vertices_per_face = ((RESOLUTION + 1) * (RESOLUTION + 1)) as usize;
         let indices_per_face = (RESOLUTION * RESOLUTION * 6) as usize;
 
-        assert_eq!(mesh.vertices.len(), vertices_per_face * CUBE_FACES.len());
-        assert_eq!(mesh.indices.len(), indices_per_face * CUBE_FACES.len());
-        assert!(
-            mesh.indices
-                .iter()
-                .all(|&index| (index as usize) < mesh.vertices.len())
-        );
-
-        for face_index in 0..CUBE_FACES.len() {
-            let vertex_start = face_index * vertices_per_face;
-            let vertex_end = vertex_start + vertices_per_face;
-            let index_start = face_index * indices_per_face;
-            let index_end = index_start + indices_per_face;
-
-            assert!(mesh.indices[index_start..index_end].iter().all(|&index| {
-                let index = index as usize;
-                (vertex_start..vertex_end).contains(&index)
-            }));
+        assert_eq!(meshes.len(), CUBE_FACES.len());
+        for mesh in meshes {
+            assert_eq!(mesh.vertices.len(), vertices_per_face);
+            assert_eq!(mesh.indices.len(), indices_per_face);
+            assert!(
+                mesh.indices
+                    .iter()
+                    .all(|&index| (index as usize) < mesh.vertices.len())
+            );
         }
     }
 
@@ -423,9 +419,9 @@ mod tests {
     fn cube_sphere_vertices_follow_terrain_radius_and_normals() {
         const RADIUS: f32 = 2.5;
         const MAX_ELEVATION: f32 = 0.2;
-        let mesh = MeshData::cube_sphere(8, Terrain::new(0, RADIUS, MAX_ELEVATION));
+        let meshes = root_patch_meshes(8, Terrain::new(0, RADIUS, MAX_ELEVATION));
 
-        assert!(mesh.vertices.iter().all(|vertex| {
+        assert!(meshes.iter().flat_map(|mesh| &mesh.vertices).all(|vertex| {
             let position = Vec3::from_array(vertex.position);
             let normal = Vec3::from_array(vertex.normal);
             position.is_finite()
@@ -439,28 +435,30 @@ mod tests {
 
     #[test]
     fn cube_sphere_triangles_have_outward_winding() {
-        let mesh = MeshData::cube_sphere(8, Terrain::new(0, 2.5, 0.2));
+        let meshes = root_patch_meshes(8, Terrain::new(0, 2.5, 0.2));
 
-        let (triangles, remainder) = mesh.indices.as_chunks::<3>();
-        assert!(remainder.is_empty());
+        for mesh in meshes {
+            let (triangles, remainder) = mesh.indices.as_chunks::<3>();
+            assert!(remainder.is_empty());
 
-        for &[first, second, third] in triangles {
-            let first = &mesh.vertices[first as usize];
-            let second = &mesh.vertices[second as usize];
-            let third = &mesh.vertices[third as usize];
-            let first_position = Vec3::from_array(first.position);
-            let second_position = Vec3::from_array(second.position);
-            let third_position = Vec3::from_array(third.position);
-            let winding_normal = (second_position - first_position)
-                .cross(third_position - first_position)
-                .normalize();
+            for &[first, second, third] in triangles {
+                let first = &mesh.vertices[first as usize];
+                let second = &mesh.vertices[second as usize];
+                let third = &mesh.vertices[third as usize];
+                let first_position = Vec3::from_array(first.position);
+                let second_position = Vec3::from_array(second.position);
+                let third_position = Vec3::from_array(third.position);
+                let winding_normal = (second_position - first_position)
+                    .cross(third_position - first_position)
+                    .normalize();
 
-            for vertex in [first, second, third] {
-                let normal = Vec3::from_array(vertex.normal);
-                assert!(
-                    winding_normal.dot(normal) > 0.0,
-                    "expected {winding_normal:?} to face outward with {normal:?}"
-                );
+                for vertex in [first, second, third] {
+                    let normal = Vec3::from_array(vertex.normal);
+                    assert!(
+                        winding_normal.dot(normal) > 0.0,
+                        "expected {winding_normal:?} to face outward with {normal:?}"
+                    );
+                }
             }
         }
     }
@@ -468,11 +466,10 @@ mod tests {
     #[test]
     fn cube_sphere_face_boundaries_share_positions_and_normals() {
         const RESOLUTION: u32 = 8;
-        let mesh = MeshData::cube_sphere(RESOLUTION, Terrain::new(0, 2.5, 0.2));
+        let meshes = root_patch_meshes(RESOLUTION, Terrain::new(0, 2.5, 0.2));
         let vertices_per_edge = (RESOLUTION + 1) as usize;
-        let vertices_per_face = vertices_per_edge * vertices_per_edge;
 
-        for face_index in 0..CUBE_FACES.len() {
+        for (face_index, mesh) in meshes.iter().enumerate() {
             for row in 0..vertices_per_edge {
                 for column in 0..vertices_per_edge {
                     if row != 0
@@ -483,15 +480,14 @@ mod tests {
                         continue;
                     }
 
-                    let index = face_index * vertices_per_face + row * vertices_per_edge + column;
+                    let index = row * vertices_per_edge + column;
                     let vertex = &mesh.vertices[index];
                     let direction = Vec3::from_array(vertex.position).normalize();
-                    let matching_vertex = mesh
-                        .vertices
-                        .chunks_exact(vertices_per_face)
+                    let matching_vertex = meshes
+                        .iter()
                         .enumerate()
                         .filter(|(other_face_index, _)| *other_face_index != face_index)
-                        .flat_map(|(_, vertices)| vertices)
+                        .flat_map(|(_, mesh)| &mesh.vertices)
                         .find(|other| {
                             Vec3::from_array(other.position)
                                 .normalize()

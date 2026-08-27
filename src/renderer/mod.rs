@@ -9,7 +9,7 @@ use std::{error::Error, fmt, sync::Arc};
 use self::{
     camera::CameraResources,
     lighting::LightingResources,
-    mesh::{GpuMesh, Vertex},
+    mesh::{TerrainMesh, Vertex},
     surface::{FrameAcquisition, SurfaceState},
 };
 use glam::Vec2;
@@ -36,7 +36,7 @@ pub struct Renderer {
     camera: CameraResources,
     lighting: LightingResources,
     render_pipeline: RenderPipeline,
-    mesh: GpuMesh,
+    terrain_mesh: TerrainMesh,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,14 +57,14 @@ impl Renderer {
             camera.bind_group_layout(),
             lighting.bind_group_layout(),
         );
-        let mesh = GpuMesh::cube_sphere(surface.device());
+        let terrain_mesh = TerrainMesh::new(surface.device());
 
         Ok(Self {
             surface,
             camera,
             lighting,
             render_pipeline,
-            mesh,
+            terrain_mesh,
         })
     }
 
@@ -125,7 +125,7 @@ impl Renderer {
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, self.camera.bind_group(), &[]);
             render_pass.set_bind_group(1, self.lighting.bind_group(), &[]);
-            self.mesh.draw(&mut render_pass);
+            self.terrain_mesh.draw(&mut render_pass);
         }
 
         self.surface.present(encoder.finish(), frame);

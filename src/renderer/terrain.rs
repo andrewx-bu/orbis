@@ -31,14 +31,9 @@ impl Terrain {
         }
     }
 
-    pub(super) fn height(self, direction: Vec3) -> f32 {
-        let direction = normalized_direction(direction);
-        fractal_noise(direction * BASE_FREQUENCY, self.seed) * self.max_elevation
-    }
-
     pub(super) fn position(self, direction: Vec3) -> Vec3 {
         let direction = normalized_direction(direction);
-        direction * (self.base_radius + self.height(direction))
+        direction * (self.base_radius + self.height_for_normalized_direction(direction))
     }
 
     pub(super) fn normal(self, direction: Vec3) -> Vec3 {
@@ -60,6 +55,10 @@ impl Terrain {
             - self.position(direction - bitangent * NORMAL_SAMPLE_DISTANCE);
 
         tangent_delta.cross(bitangent_delta).normalize()
+    }
+
+    fn height_for_normalized_direction(self, direction: Vec3) -> f32 {
+        fractal_noise(direction * BASE_FREQUENCY, self.seed) * self.max_elevation
     }
 }
 
@@ -155,7 +154,11 @@ mod tests {
         let second = Terrain::new(42, BASE_RADIUS, MAX_ELEVATION);
 
         for direction in DIRECTIONS {
-            assert_eq!(first.height(direction), second.height(direction));
+            let direction = direction.normalize();
+            assert_eq!(
+                first.height_for_normalized_direction(direction),
+                second.height_for_normalized_direction(direction)
+            );
         }
     }
 
@@ -167,7 +170,11 @@ mod tests {
         assert!(
             DIRECTIONS
                 .iter()
-                .any(|&direction| first.height(direction) != second.height(direction))
+                .map(|direction| direction.normalize())
+                .any(|direction| {
+                    first.height_for_normalized_direction(direction)
+                        != second.height_for_normalized_direction(direction)
+                })
         );
     }
 
@@ -177,7 +184,7 @@ mod tests {
 
         for direction in DIRECTIONS {
             let direction = direction.normalize();
-            let height = terrain.height(direction);
+            let height = terrain.height_for_normalized_direction(direction);
             let position = terrain.position(direction);
             let normal = terrain.normal(direction);
 

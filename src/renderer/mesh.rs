@@ -14,22 +14,45 @@ const CUBE_SPHERE_COLOR: [f32; 3] = [0.2, 0.7, 0.35];
 const DEFAULT_TERRAIN_SEED: u32 = 0;
 const TERRAIN_MAX_ELEVATION: f32 = 0.08;
 const CUBE_FACES: [CubeFace; 6] = [
-    CubeFace::new(Vec3::Z, Vec3::X, Vec3::Y),
-    CubeFace::new(Vec3::NEG_Z, Vec3::NEG_X, Vec3::Y),
-    CubeFace::new(Vec3::NEG_X, Vec3::Z, Vec3::Y),
-    CubeFace::new(Vec3::X, Vec3::NEG_Z, Vec3::Y),
-    CubeFace::new(Vec3::Y, Vec3::X, Vec3::NEG_Z),
-    CubeFace::new(Vec3::NEG_Y, Vec3::X, Vec3::Z),
+    CubeFace::Front,
+    CubeFace::Back,
+    CubeFace::Left,
+    CubeFace::Right,
+    CubeFace::Top,
+    CubeFace::Bottom,
 ];
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CubeFace {
+    Front,
+    Back,
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+impl CubeFace {
+    const fn basis(self) -> FaceBasis {
+        match self {
+            Self::Front => FaceBasis::new(Vec3::Z, Vec3::X, Vec3::Y),
+            Self::Back => FaceBasis::new(Vec3::NEG_Z, Vec3::NEG_X, Vec3::Y),
+            Self::Left => FaceBasis::new(Vec3::NEG_X, Vec3::Z, Vec3::Y),
+            Self::Right => FaceBasis::new(Vec3::X, Vec3::NEG_Z, Vec3::Y),
+            Self::Top => FaceBasis::new(Vec3::Y, Vec3::X, Vec3::NEG_Z),
+            Self::Bottom => FaceBasis::new(Vec3::NEG_Y, Vec3::X, Vec3::Z),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
-struct CubeFace {
+struct FaceBasis {
     normal: Vec3,
     horizontal: Vec3,
     vertical: Vec3,
 }
 
-impl CubeFace {
+impl FaceBasis {
     const fn new(normal: Vec3, horizontal: Vec3, vertical: Vec3) -> Self {
         Self {
             normal,
@@ -37,6 +60,54 @@ impl CubeFace {
             vertical,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PatchId {
+    face: CubeFace,
+    level: u32,
+    x: u32,
+    y: u32,
+}
+
+impl PatchId {
+    const fn new(face: CubeFace, level: u32, x: u32, y: u32) -> Self {
+        let Some(patches_per_edge) = 1_u32.checked_shl(level) else {
+            panic!("terrain patch level exceeds the supported range");
+        };
+        assert!(
+            x < patches_per_edge && y < patches_per_edge,
+            "terrain patch coordinates must be within their level"
+        );
+
+        Self { face, level, x, y }
+    }
+
+    const fn root(face: CubeFace) -> Self {
+        Self::new(face, 0, 0, 0)
+    }
+
+    fn bounds(self) -> PatchBounds {
+        let patches_per_edge = 1_u32 << self.level;
+        let width = 2.0 / patches_per_edge as f32;
+        let minimum_horizontal = -1.0 + self.x as f32 * width;
+        let minimum_vertical = -1.0 + self.y as f32 * width;
+
+        PatchBounds {
+            minimum_horizontal,
+            maximum_horizontal: minimum_horizontal + width,
+            minimum_vertical,
+            maximum_vertical: minimum_vertical + width,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PatchBounds {
+    minimum_horizontal: f32,
+    maximum_horizontal: f32,
+    minimum_vertical: f32,
+    maximum_vertical: f32,
 }
 
 #[repr(C)]
@@ -87,14 +158,21 @@ impl MeshData {
         let mut indices = Vec::with_capacity((indices_per_face * 6) as usize);
 
         for face in CUBE_FACES {
+            let patch = PatchId::root(face);
+            let face = patch.face.basis();
+            let bounds = patch.bounds();
             let face_start = u32::try_from(vertices.len())
                 .expect("cube-sphere vertex count exceeds the supported u32 range");
 
             for row in 0..=resolution {
-                let vertical = -1.0 + 2.0 * row as f32 / resolution as f32;
+                let vertical = bounds.minimum_vertical
+                    + (bounds.maximum_vertical - bounds.minimum_vertical) * row as f32
+                        / resolution as f32;
 
                 for column in 0..=resolution {
-                    let horizontal = -1.0 + 2.0 * column as f32 / resolution as f32;
+                    let horizontal = bounds.minimum_horizontal
+                        + (bounds.maximum_horizontal - bounds.minimum_horizontal) * column as f32
+                            / resolution as f32;
                     let direction =
                         (face.normal + face.horizontal * horizontal + face.vertical * vertical)
                             .normalize();
@@ -171,6 +249,65 @@ impl GpuMesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn root_patches_cover_each_cube_face() {
+        let patches = CUBE_FACES.map(PatchId::root);
+
+        assert!(
+            patches
+                .iter()
+                .all(|patch| patch.level == 0 && patch.x == 0 && patch.y == 0)
+        );
+        assert!(patches.iter().all(|patch| {
+            patch.bounds()
+                == PatchBounds {
+                    minimum_horizontal: -1.0,
+                    maximum_horizontal: 1.0,
+                    minimum_vertical: -1.0,
+                    maximum_vertical: 1.0,
+                }
+        }));
+    }
+
+    #[test]
+    fn child_patches_tile_the_parent() {
+        let parent = PatchId::new(CubeFace::Front, 1, 1, 0);
+        let lower_left = PatchId::new(CubeFace::Front, 2, 2, 0);
+        let lower_right = PatchId::new(CubeFace::Front, 2, 3, 0);
+        let upper_left = PatchId::new(CubeFace::Front, 2, 2, 1);
+        let upper_right = PatchId::new(CubeFace::Front, 2, 3, 1);
+        assert_eq!(
+            lower_left.bounds().minimum_horizontal,
+            parent.bounds().minimum_horizontal
+        );
+        assert_eq!(
+            lower_left.bounds().minimum_vertical,
+            parent.bounds().minimum_vertical
+        );
+        assert_eq!(
+            upper_right.bounds().maximum_horizontal,
+            parent.bounds().maximum_horizontal
+        );
+        assert_eq!(
+            upper_right.bounds().maximum_vertical,
+            parent.bounds().maximum_vertical
+        );
+        assert_eq!(
+            lower_left.bounds().maximum_horizontal,
+            lower_right.bounds().minimum_horizontal
+        );
+        assert_eq!(
+            lower_left.bounds().maximum_vertical,
+            upper_left.bounds().minimum_vertical
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "terrain patch coordinates must be within their level")]
+    fn patch_coordinates_must_be_within_their_level() {
+        PatchId::new(CubeFace::Front, 1, 2, 0);
+    }
 
     #[test]
     fn vertex_layout_matches_shader_contract() {

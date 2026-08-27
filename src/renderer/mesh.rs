@@ -1,50 +1,39 @@
 use bytemuck::{Pod, Zeroable};
+use glam::Vec3;
 use wgpu::{
     Buffer, BufferAddress, BufferUsages, Device, IndexFormat, RenderPass, VertexAttribute,
     VertexBufferLayout, VertexStepMode,
     util::{BufferInitDescriptor, DeviceExt},
 };
 
-const CUBE_VERTICES: &[Vertex] = &[
-    // Front
-    Vertex::new([-0.6, -0.6, 0.6], [0.9, 0.2, 0.2], [0.0, 0.0, 1.0]),
-    Vertex::new([0.6, -0.6, 0.6], [0.2, 0.9, 0.3], [0.0, 0.0, 1.0]),
-    Vertex::new([0.6, 0.6, 0.6], [0.2, 0.4, 1.0], [0.0, 0.0, 1.0]),
-    Vertex::new([-0.6, 0.6, 0.6], [0.9, 0.8, 0.2], [0.0, 0.0, 1.0]),
-    // Back
-    Vertex::new([0.6, -0.6, -0.6], [0.2, 0.8, 0.9], [0.0, 0.0, -1.0]),
-    Vertex::new([-0.6, -0.6, -0.6], [0.5, 0.2, 0.9], [0.0, 0.0, -1.0]),
-    Vertex::new([-0.6, 0.6, -0.6], [0.4, 0.9, 0.2], [0.0, 0.0, -1.0]),
-    Vertex::new([0.6, 0.6, -0.6], [0.9, 0.5, 0.2], [0.0, 0.0, -1.0]),
-    // Left
-    Vertex::new([-0.6, -0.6, -0.6], [0.5, 0.2, 0.9], [-1.0, 0.0, 0.0]),
-    Vertex::new([-0.6, -0.6, 0.6], [0.9, 0.2, 0.2], [-1.0, 0.0, 0.0]),
-    Vertex::new([-0.6, 0.6, 0.6], [0.9, 0.8, 0.2], [-1.0, 0.0, 0.0]),
-    Vertex::new([-0.6, 0.6, -0.6], [0.4, 0.9, 0.2], [-1.0, 0.0, 0.0]),
-    // Right
-    Vertex::new([0.6, -0.6, 0.6], [0.2, 0.9, 0.3], [1.0, 0.0, 0.0]),
-    Vertex::new([0.6, -0.6, -0.6], [0.2, 0.8, 0.9], [1.0, 0.0, 0.0]),
-    Vertex::new([0.6, 0.6, -0.6], [0.9, 0.5, 0.2], [1.0, 0.0, 0.0]),
-    Vertex::new([0.6, 0.6, 0.6], [0.2, 0.4, 1.0], [1.0, 0.0, 0.0]),
-    // Top
-    Vertex::new([-0.6, 0.6, 0.6], [0.9, 0.8, 0.2], [0.0, 1.0, 0.0]),
-    Vertex::new([0.6, 0.6, 0.6], [0.2, 0.4, 1.0], [0.0, 1.0, 0.0]),
-    Vertex::new([0.6, 0.6, -0.6], [0.9, 0.5, 0.2], [0.0, 1.0, 0.0]),
-    Vertex::new([-0.6, 0.6, -0.6], [0.4, 0.9, 0.2], [0.0, 1.0, 0.0]),
-    // Bottom
-    Vertex::new([-0.6, -0.6, -0.6], [0.5, 0.2, 0.9], [0.0, -1.0, 0.0]),
-    Vertex::new([0.6, -0.6, -0.6], [0.2, 0.8, 0.9], [0.0, -1.0, 0.0]),
-    Vertex::new([0.6, -0.6, 0.6], [0.2, 0.9, 0.3], [0.0, -1.0, 0.0]),
-    Vertex::new([-0.6, -0.6, 0.6], [0.9, 0.2, 0.2], [0.0, -1.0, 0.0]),
+const CUBE_SPHERE_RESOLUTION: u32 = 16;
+const CUBE_SPHERE_RADIUS: f32 = 0.6;
+const CUBE_SPHERE_COLOR: [f32; 3] = [0.2, 0.7, 0.35];
+const CUBE_FACES: [CubeFace; 6] = [
+    CubeFace::new(Vec3::Z, Vec3::X, Vec3::Y),
+    CubeFace::new(Vec3::NEG_Z, Vec3::NEG_X, Vec3::Y),
+    CubeFace::new(Vec3::NEG_X, Vec3::Z, Vec3::Y),
+    CubeFace::new(Vec3::X, Vec3::NEG_Z, Vec3::Y),
+    CubeFace::new(Vec3::Y, Vec3::X, Vec3::NEG_Z),
+    CubeFace::new(Vec3::NEG_Y, Vec3::X, Vec3::Z),
 ];
-const CUBE_INDICES: &[u16] = &[
-    0, 1, 2, 0, 2, 3, // Front
-    4, 5, 6, 4, 6, 7, // Back
-    8, 9, 10, 8, 10, 11, // Left
-    12, 13, 14, 12, 14, 15, // Right
-    16, 17, 18, 16, 18, 19, // Top
-    20, 21, 22, 20, 22, 23, // Bottom
-];
+
+#[derive(Clone, Copy)]
+struct CubeFace {
+    normal: Vec3,
+    horizontal: Vec3,
+    vertical: Vec3,
+}
+
+impl CubeFace {
+    const fn new(normal: Vec3, horizontal: Vec3, vertical: Vec3) -> Self {
+        Self {
+            normal,
+            horizontal,
+            vertical,
+        }
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -78,6 +67,60 @@ impl Vertex {
     }
 }
 
+struct MeshData {
+    vertices: Vec<Vertex>,
+    indices: Vec<u32>,
+}
+
+impl MeshData {
+    fn cube_sphere(resolution: u32, radius: f32) -> Self {
+        assert!(resolution > 0, "cube-sphere resolution must be positive");
+        assert!(
+            radius.is_finite() && radius > 0.0,
+            "cube-sphere radius must be finite and positive"
+        );
+
+        let vertices_per_edge = resolution + 1;
+        let vertices_per_face = vertices_per_edge * vertices_per_edge;
+        let indices_per_face = resolution * resolution * 6;
+        let mut vertices = Vec::with_capacity((vertices_per_face * 6) as usize);
+        let mut indices = Vec::with_capacity((indices_per_face * 6) as usize);
+
+        for face in CUBE_FACES {
+            let face_start = u32::try_from(vertices.len())
+                .expect("cube-sphere vertex count exceeds the supported u32 range");
+
+            for row in 0..=resolution {
+                let vertical = -1.0 + 2.0 * row as f32 / resolution as f32;
+
+                for column in 0..=resolution {
+                    let horizontal = -1.0 + 2.0 * column as f32 / resolution as f32;
+                    let normal =
+                        (face.normal + face.horizontal * horizontal + face.vertical * vertical)
+                            .normalize();
+                    vertices.push(Vertex::new(
+                        (normal * radius).to_array(),
+                        CUBE_SPHERE_COLOR,
+                        normal.to_array(),
+                    ));
+                }
+            }
+
+            for row in 0..resolution {
+                for column in 0..resolution {
+                    let first = face_start + row * vertices_per_edge + column;
+                    let second = first + 1;
+                    let fourth = first + vertices_per_edge;
+                    let third = fourth + 1;
+                    indices.extend_from_slice(&[first, second, third, first, third, fourth]);
+                }
+            }
+        }
+
+        Self { vertices, indices }
+    }
+}
+
 pub(super) struct GpuMesh {
     vertex_buffer: Buffer,
     index_buffer: Buffer,
@@ -85,11 +128,12 @@ pub(super) struct GpuMesh {
 }
 
 impl GpuMesh {
-    pub(super) fn cube(device: &Device) -> Self {
-        Self::new(device, CUBE_VERTICES, CUBE_INDICES)
+    pub(super) fn cube_sphere(device: &Device) -> Self {
+        let mesh = MeshData::cube_sphere(CUBE_SPHERE_RESOLUTION, CUBE_SPHERE_RADIUS);
+        Self::new(device, &mesh.vertices, &mesh.indices)
     }
 
-    fn new(device: &Device, vertices: &[Vertex], indices: &[u16]) -> Self {
+    fn new(device: &Device, vertices: &[Vertex], indices: &[u32]) -> Self {
         let vertex_buffer = device.create_buffer_init(&BufferInitDescriptor {
             label: Some("Orbis mesh vertex buffer"),
             contents: bytemuck::cast_slice(vertices),
@@ -114,7 +158,7 @@ impl GpuMesh {
 
     pub(super) fn draw<'pass>(&'pass self, render_pass: &mut RenderPass<'pass>) {
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(self.index_buffer.slice(..), IndexFormat::Uint16);
+        render_pass.set_index_buffer(self.index_buffer.slice(..), IndexFormat::Uint32);
         render_pass.draw_indexed(0..self.index_count, 0, 0..1);
     }
 }
@@ -122,10 +166,9 @@ impl GpuMesh {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glam::Vec3;
 
     #[test]
-    fn cube_mesh_matches_shader_contract() {
+    fn vertex_layout_matches_shader_contract() {
         let layout = Vertex::layout();
         let [position, color, normal] = layout.attributes else {
             panic!("vertex layout must contain position, color, and normal attributes");
@@ -142,31 +185,63 @@ mod tests {
         assert_eq!(normal.format, wgpu::VertexFormat::Float32x3);
         assert_eq!(normal.offset, 24);
         assert_eq!(normal.shader_location, 2);
-
-        assert_eq!(CUBE_VERTICES.len(), 24);
-        assert_eq!(CUBE_INDICES.len(), 36);
-        assert_eq!(CUBE_INDICES.len() % 3, 0);
-        assert!(
-            CUBE_INDICES
-                .iter()
-                .all(|&index| usize::from(index) < CUBE_VERTICES.len())
-        );
     }
 
     #[test]
-    fn cube_normals_are_unit_length_and_match_triangle_winding() {
-        assert!(CUBE_VERTICES.iter().all(|vertex| {
-            let normal = Vec3::from_array(vertex.normal);
-            normal.is_finite() && normal.is_normalized()
-        }));
+    fn cube_sphere_has_expected_face_geometry() {
+        const RESOLUTION: u32 = 4;
+        let mesh = MeshData::cube_sphere(RESOLUTION, 2.5);
+        let vertices_per_face = ((RESOLUTION + 1) * (RESOLUTION + 1)) as usize;
+        let indices_per_face = (RESOLUTION * RESOLUTION * 6) as usize;
 
-        let (triangles, remainder) = CUBE_INDICES.as_chunks::<3>();
+        assert_eq!(mesh.vertices.len(), vertices_per_face * CUBE_FACES.len());
+        assert_eq!(mesh.indices.len(), indices_per_face * CUBE_FACES.len());
+        assert!(
+            mesh.indices
+                .iter()
+                .all(|&index| (index as usize) < mesh.vertices.len())
+        );
+
+        for face_index in 0..CUBE_FACES.len() {
+            let vertex_start = face_index * vertices_per_face;
+            let vertex_end = vertex_start + vertices_per_face;
+            let index_start = face_index * indices_per_face;
+            let index_end = index_start + indices_per_face;
+
+            assert!(mesh.indices[index_start..index_end].iter().all(|&index| {
+                let index = index as usize;
+                (vertex_start..vertex_end).contains(&index)
+            }));
+        }
+    }
+
+    #[test]
+    fn cube_sphere_vertices_have_the_requested_radius_and_outward_normals() {
+        const RADIUS: f32 = 2.5;
+        let mesh = MeshData::cube_sphere(4, RADIUS);
+
+        assert!(mesh.vertices.iter().all(|vertex| {
+            let position = Vec3::from_array(vertex.position);
+            let normal = Vec3::from_array(vertex.normal);
+            position.is_finite()
+                && (position.length() - RADIUS).abs() <= 1.0e-6
+                && normal.is_finite()
+                && normal.is_normalized()
+                && normal.abs_diff_eq(position.normalize(), 1.0e-6)
+        }));
+    }
+
+    #[test]
+    fn cube_sphere_triangles_have_outward_winding() {
+        let mesh = MeshData::cube_sphere(4, 2.5);
+
+        let (triangles, remainder) = mesh.indices.as_chunks::<3>();
         assert!(remainder.is_empty());
 
         for &[first, second, third] in triangles {
-            let first = &CUBE_VERTICES[usize::from(first)];
-            let second = &CUBE_VERTICES[usize::from(second)];
-            let third = &CUBE_VERTICES[usize::from(third)];
+            let first = &mesh.vertices[first as usize];
+            let second = &mesh.vertices[second as usize];
+            let third = &mesh.vertices[third as usize];
             let first_position = Vec3::from_array(first.position);
             let second_position = Vec3::from_array(second.position);
             let third_position = Vec3::from_array(third.position);
@@ -177,8 +252,8 @@ mod tests {
             for vertex in [first, second, third] {
                 let normal = Vec3::from_array(vertex.normal);
                 assert!(
-                    normal.abs_diff_eq(winding_normal, 1.0e-6),
-                    "expected {winding_normal:?}, got {normal:?}"
+                    winding_normal.dot(normal) > 0.0,
+                    "expected {winding_normal:?} to face outward with {normal:?}"
                 );
             }
         }

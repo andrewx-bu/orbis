@@ -56,7 +56,7 @@ impl Renderer {
             camera.bind_group_layout(),
             lighting.bind_group_layout(),
         );
-        let mesh = GpuMesh::cube(surface.device());
+        let mesh = GpuMesh::cube_sphere(surface.device());
 
         Ok(Self {
             surface,

@@ -6,7 +6,7 @@ use super::{
     terrain::Terrain,
 };
 
-const PATCH_RESOLUTION: u32 = 64;
+const PATCH_RESOLUTION: u32 = 32;
 const PLANET_RADIUS: f32 = 0.6;
 const TERRAIN_COLOR: [f32; 3] = [0.2, 0.7, 0.35];
 const DEFAULT_TERRAIN_SEED: u32 = 0;
@@ -83,6 +83,29 @@ impl PatchId {
         Self::new(face, 0, 0, 0)
     }
 
+    fn children(self) -> [Self; 4] {
+        let level = self.level + 1;
+        let x = self.x * 2;
+        let y = self.y * 2;
+
+        [
+            Self::new(self.face, level, x, y),
+            Self::new(self.face, level, x + 1, y),
+            Self::new(self.face, level, x, y + 1),
+            Self::new(self.face, level, x + 1, y + 1),
+        ]
+    }
+
+    fn debug_color(self) -> [f32; 3] {
+        let mut hash = self.face as u32;
+        for component in [self.level, self.x, self.y] {
+            hash = (hash ^ component).wrapping_mul(0x9e37_79b1);
+            hash ^= hash >> 16;
+        }
+
+        [0, 8, 16].map(|shift| 0.25 + ((hash >> shift) & 0xff) as f32 / 255.0 * 0.65)
+    }
+
     fn bounds(self) -> PatchBounds {
         let patches_per_edge = patches_per_edge(self.level);
         let width = 2.0 / patches_per_edge as f32;
@@ -118,6 +141,7 @@ fn generate_patch(resolution: u32, terrain: Terrain, patch: PatchId) -> MeshData
     let counts = patch_mesh_counts(resolution);
     let face = patch.face.basis();
     let bounds = patch.bounds();
+    let debug_color = patch.debug_color();
     validate_patch_spacing(bounds, resolution);
     let mut vertices = Vec::with_capacity(counts.vertex_count as usize);
     let mut indices = Vec::with_capacity(counts.index_count as usize);
@@ -143,6 +167,11 @@ fn generate_patch(resolution: u32, terrain: Terrain, patch: PatchId) -> MeshData
                 terrain.position(direction).to_array(),
                 TERRAIN_COLOR,
                 terrain.normal(direction).to_array(),
+                debug_color,
+                [
+                    column as f32 / resolution as f32,
+                    row as f32 / resolution as f32,
+                ],
             ));
         }
     }
@@ -213,13 +242,18 @@ pub(super) struct TerrainMesh {
     patches: Vec<GpuMesh>,
 }
 
+fn initial_patches() -> impl Iterator<Item = PatchId> {
+    CUBE_FACES
+        .into_iter()
+        .flat_map(|face| PatchId::root(face).children())
+}
+
 impl TerrainMesh {
     pub(super) fn new(device: &Device) -> Self {
         let terrain = Terrain::new(DEFAULT_TERRAIN_SEED, PLANET_RADIUS, TERRAIN_MAX_ELEVATION);
-        let patches = CUBE_FACES
-            .into_iter()
-            .map(|face| {
-                let mesh = generate_patch(PATCH_RESOLUTION, terrain, PatchId::root(face));
+        let patches = initial_patches()
+            .map(|patch| {
+                let mesh = generate_patch(PATCH_RESOLUTION, terrain, patch);
                 GpuMesh::new(device, &mesh)
             })
             .collect();
@@ -268,10 +302,16 @@ mod tests {
     #[test]
     fn child_patches_tile_the_parent() {
         let parent = PatchId::new(CubeFace::Front, 1, 1, 0);
-        let lower_left = PatchId::new(CubeFace::Front, 2, 2, 0);
-        let lower_right = PatchId::new(CubeFace::Front, 2, 3, 0);
-        let upper_left = PatchId::new(CubeFace::Front, 2, 2, 1);
-        let upper_right = PatchId::new(CubeFace::Front, 2, 3, 1);
+        let [lower_left, lower_right, upper_left, upper_right] = parent.children();
+        assert_eq!(
+            parent.children(),
+            [
+                PatchId::new(CubeFace::Front, 2, 2, 0),
+                PatchId::new(CubeFace::Front, 2, 3, 0),
+                PatchId::new(CubeFace::Front, 2, 2, 1),
+                PatchId::new(CubeFace::Front, 2, 3, 1),
+            ]
+        );
         assert_eq!(
             lower_left.bounds().minimum_horizontal,
             parent.bounds().minimum_horizontal
@@ -296,6 +336,58 @@ mod tests {
             lower_left.bounds().maximum_vertical,
             upper_left.bounds().minimum_vertical
         );
+    }
+
+    #[test]
+    fn initial_patches_cover_every_face_at_the_original_triangle_count() {
+        let patches: Vec<_> = initial_patches().collect();
+        assert_eq!(patches.len(), 24);
+
+        for face in CUBE_FACES {
+            for y in 0..2 {
+                for x in 0..2 {
+                    let expected = PatchId::new(face, 1, x, y);
+                    assert_eq!(
+                        patches.iter().filter(|&&patch| patch == expected).count(),
+                        1
+                    );
+                }
+            }
+        }
+
+        let triangle_count =
+            patches.len() * patch_mesh_counts(PATCH_RESOLUTION).index_count as usize / 3;
+        assert_eq!(triangle_count, 6 * 64 * 64 * 2);
+    }
+
+    #[test]
+    fn patch_debug_attributes_identify_patches_and_their_boundaries() {
+        const RESOLUTION: u32 = 4;
+        let patches: Vec<_> = initial_patches().collect();
+        let terrain = Terrain::new(42, PLANET_RADIUS, TERRAIN_MAX_ELEVATION);
+
+        for (index, &patch) in patches.iter().enumerate() {
+            let mesh = generate_patch(RESOLUTION, terrain, patch);
+            let color = patch.debug_color();
+            assert!(color.iter().all(|channel| (0.25..=0.9).contains(channel)));
+            assert!(
+                patches[..index]
+                    .iter()
+                    .all(|other| other.debug_color() != color)
+            );
+            for row in 0..=RESOLUTION {
+                for column in 0..=RESOLUTION {
+                    let vertex = &mesh.vertices[(row * (RESOLUTION + 1) + column) as usize];
+                    assert_eq!(vertex.debug_color, color);
+                    let [u, v] = vertex.patch_uv;
+                    assert!((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v));
+                    assert_eq!(u == 0.0, column == 0);
+                    assert_eq!(u == 1.0, column == RESOLUTION);
+                    assert_eq!(v == 0.0, row == 0);
+                    assert_eq!(v == 1.0, row == RESOLUTION);
+                }
+            }
+        }
     }
 
     #[test]
@@ -331,11 +423,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "terrain patch level and resolution exceed f32 coordinate precision")]
     fn terrain_patch_rejects_collapsed_vertex_spacing() {
+        const RESOLUTION: u32 = 64;
         let level = 20;
         let edge = patches_per_edge(level) - 1;
 
         generate_patch(
-            PATCH_RESOLUTION,
+            RESOLUTION,
             Terrain::new(0, 2.5, 0.0),
             PatchId::new(CubeFace::Front, level, edge, edge),
         );
@@ -456,9 +549,23 @@ mod tests {
     fn cube_sphere_face_boundaries_share_positions_and_normals() {
         const RESOLUTION: u32 = 8;
         let meshes = root_patch_meshes(RESOLUTION, Terrain::new(0, 2.5, 0.2));
-        let vertices_per_edge = (RESOLUTION + 1) as usize;
+        assert_patch_boundaries_match(&meshes, RESOLUTION);
+    }
 
-        for (face_index, mesh) in meshes.iter().enumerate() {
+    #[test]
+    fn initial_patch_boundaries_share_positions_and_normals() {
+        const RESOLUTION: u32 = 8;
+        let terrain = Terrain::new(42, PLANET_RADIUS, TERRAIN_MAX_ELEVATION);
+        let meshes: Vec<_> = initial_patches()
+            .map(|patch| generate_patch(RESOLUTION, terrain, patch))
+            .collect();
+        assert_patch_boundaries_match(&meshes, RESOLUTION);
+    }
+
+    fn assert_patch_boundaries_match(meshes: &[MeshData], resolution: u32) {
+        let vertices_per_edge = (resolution + 1) as usize;
+
+        for (patch_index, mesh) in meshes.iter().enumerate() {
             for row in 0..vertices_per_edge {
                 for column in 0..vertices_per_edge {
                     if row != 0
@@ -475,14 +582,14 @@ mod tests {
                     let matching_vertex = meshes
                         .iter()
                         .enumerate()
-                        .filter(|(other_face_index, _)| *other_face_index != face_index)
+                        .filter(|(other_patch_index, _)| *other_patch_index != patch_index)
                         .flat_map(|(_, mesh)| &mesh.vertices)
                         .find(|other| {
                             Vec3::from_array(other.position)
                                 .normalize()
                                 .abs_diff_eq(direction, 1.0e-6)
                         })
-                        .expect("each face-boundary vertex must belong to another face");
+                        .expect("each patch-boundary vertex must belong to another patch");
 
                     assert!(
                         Vec3::from_array(matching_vertex.position)

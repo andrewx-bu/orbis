@@ -9,6 +9,7 @@ use winit::{
     dpi::{LogicalSize, PhysicalSize},
     event::{DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    keyboard::{KeyCode, PhysicalKey},
     window::{Window, WindowId},
 };
 
@@ -156,6 +157,17 @@ impl ApplicationHandler for App {
                 window_state.mouse_button(state, button);
             }
             WindowEvent::MouseWheel { delta, .. } => window_state.mouse_wheel(delta),
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic: false,
+                ..
+            } if event.state == ElementState::Pressed
+                && !event.repeat
+                && event.physical_key == PhysicalKey::Code(KeyCode::KeyD) =>
+            {
+                window_state.renderer.toggle_patch_debug();
+                window_state.request_redraw();
+            }
             WindowEvent::Resized(size) => window_state.resize(size),
             WindowEvent::RedrawRequested => {
                 if let Err(error) = window_state.render() {

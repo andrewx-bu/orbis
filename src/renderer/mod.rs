@@ -38,6 +38,8 @@ pub struct Renderer {
     camera: CameraResources,
     lighting: LightingResources,
     render_pipeline: RenderPipeline,
+    patch_debug_pipeline: RenderPipeline,
+    patch_debug_enabled: bool,
     terrain_mesh: TerrainMesh,
 }
 
@@ -58,6 +60,14 @@ impl Renderer {
             surface.format(),
             camera.bind_group_layout(),
             lighting.bind_group_layout(),
+            "fragment_main",
+        );
+        let patch_debug_pipeline = create_render_pipeline(
+            surface.device(),
+            surface.format(),
+            camera.bind_group_layout(),
+            lighting.bind_group_layout(),
+            "fragment_patch_debug",
         );
         let terrain_mesh = TerrainMesh::new(surface.device());
 
@@ -66,6 +76,8 @@ impl Renderer {
             camera,
             lighting,
             render_pipeline,
+            patch_debug_pipeline,
+            patch_debug_enabled: false,
             terrain_mesh,
         })
     }
@@ -82,6 +94,10 @@ impl Renderer {
 
     pub fn zoom_camera(&mut self, scroll_amount: f32) -> bool {
         self.camera.zoom(self.surface.queue(), scroll_amount)
+    }
+
+    pub fn toggle_patch_debug(&mut self) {
+        self.patch_debug_enabled = !self.patch_debug_enabled;
     }
 
     pub fn render(&mut self) -> Result<RenderOutcome, RendererError> {
@@ -124,7 +140,12 @@ impl Renderer {
                 depth_stencil_attachment: Some(depth_stencil_attachment),
                 ..Default::default()
             });
-            render_pass.set_pipeline(&self.render_pipeline);
+            let pipeline = if self.patch_debug_enabled {
+                &self.patch_debug_pipeline
+            } else {
+                &self.render_pipeline
+            };
+            render_pass.set_pipeline(pipeline);
             render_pass.set_bind_group(0, self.camera.bind_group(), &[]);
             render_pass.set_bind_group(1, self.lighting.bind_group(), &[]);
             self.terrain_mesh.draw(&mut render_pass);
@@ -141,6 +162,7 @@ fn create_render_pipeline(
     surface_format: TextureFormat,
     camera_bind_group_layout: &BindGroupLayout,
     lighting_bind_group_layout: &BindGroupLayout,
+    fragment_entry_point: &str,
 ) -> RenderPipeline {
     let shader = device.create_shader_module(ShaderModuleDescriptor {
         label: Some("Orbis geometry shader"),
@@ -175,7 +197,7 @@ fn create_render_pipeline(
         multisample: Default::default(),
         fragment: Some(FragmentState {
             module: &shader,
-            entry_point: Some("fragment_main"),
+            entry_point: Some(fragment_entry_point),
             targets: &[Some(ColorTargetState {
                 format: surface_format,
                 blend: None,

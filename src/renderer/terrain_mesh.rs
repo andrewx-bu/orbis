@@ -96,6 +96,16 @@ impl PatchId {
         ]
     }
 
+    fn debug_color(self) -> [f32; 3] {
+        let mut hash = self.face as u32;
+        for component in [self.level, self.x, self.y] {
+            hash = (hash ^ component).wrapping_mul(0x9e37_79b1);
+            hash ^= hash >> 16;
+        }
+
+        [0, 8, 16].map(|shift| 0.25 + ((hash >> shift) & 0xff) as f32 / 255.0 * 0.65)
+    }
+
     fn bounds(self) -> PatchBounds {
         let patches_per_edge = patches_per_edge(self.level);
         let width = 2.0 / patches_per_edge as f32;
@@ -131,6 +141,7 @@ fn generate_patch(resolution: u32, terrain: Terrain, patch: PatchId) -> MeshData
     let counts = patch_mesh_counts(resolution);
     let face = patch.face.basis();
     let bounds = patch.bounds();
+    let debug_color = patch.debug_color();
     validate_patch_spacing(bounds, resolution);
     let mut vertices = Vec::with_capacity(counts.vertex_count as usize);
     let mut indices = Vec::with_capacity(counts.index_count as usize);
@@ -156,6 +167,11 @@ fn generate_patch(resolution: u32, terrain: Terrain, patch: PatchId) -> MeshData
                 terrain.position(direction).to_array(),
                 TERRAIN_COLOR,
                 terrain.normal(direction).to_array(),
+                debug_color,
+                [
+                    column as f32 / resolution as f32,
+                    row as f32 / resolution as f32,
+                ],
             ));
         }
     }
@@ -342,6 +358,36 @@ mod tests {
         let triangle_count =
             patches.len() * patch_mesh_counts(PATCH_RESOLUTION).index_count as usize / 3;
         assert_eq!(triangle_count, 6 * 64 * 64 * 2);
+    }
+
+    #[test]
+    fn patch_debug_attributes_identify_patches_and_their_boundaries() {
+        const RESOLUTION: u32 = 4;
+        let patches: Vec<_> = initial_patches().collect();
+        let terrain = Terrain::new(42, PLANET_RADIUS, TERRAIN_MAX_ELEVATION);
+
+        for (index, &patch) in patches.iter().enumerate() {
+            let mesh = generate_patch(RESOLUTION, terrain, patch);
+            let color = patch.debug_color();
+            assert!(color.iter().all(|channel| (0.25..=0.9).contains(channel)));
+            assert!(
+                patches[..index]
+                    .iter()
+                    .all(|other| other.debug_color() != color)
+            );
+            for row in 0..=RESOLUTION {
+                for column in 0..=RESOLUTION {
+                    let vertex = &mesh.vertices[(row * (RESOLUTION + 1) + column) as usize];
+                    assert_eq!(vertex.debug_color, color);
+                    let [u, v] = vertex.patch_uv;
+                    assert!((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v));
+                    assert_eq!(u == 0.0, column == 0);
+                    assert_eq!(u == 1.0, column == RESOLUTION);
+                    assert_eq!(v == 0.0, row == 0);
+                    assert_eq!(v == 1.0, row == RESOLUTION);
+                }
+            }
+        }
     }
 
     #[test]

@@ -11,20 +11,32 @@ pub(super) struct Vertex {
     pub(super) position: [f32; 3],
     pub(super) color: [f32; 3],
     pub(super) normal: [f32; 3],
+    pub(super) debug_color: [f32; 3],
+    pub(super) patch_uv: [f32; 2],
 }
 
 impl Vertex {
-    const ATTRIBUTES: [VertexAttribute; 3] = wgpu::vertex_attr_array![
+    const ATTRIBUTES: [VertexAttribute; 5] = wgpu::vertex_attr_array![
         0 => Float32x3,
         1 => Float32x3,
         2 => Float32x3,
+        3 => Float32x3,
+        4 => Float32x2,
     ];
 
-    pub(super) const fn new(position: [f32; 3], color: [f32; 3], normal: [f32; 3]) -> Self {
+    pub(super) const fn new(
+        position: [f32; 3],
+        color: [f32; 3],
+        normal: [f32; 3],
+        debug_color: [f32; 3],
+        patch_uv: [f32; 2],
+    ) -> Self {
         Self {
             position,
             color,
             normal,
+            debug_color,
+            patch_uv,
         }
     }
 
@@ -93,11 +105,11 @@ mod tests {
     #[test]
     fn vertex_layout_matches_shader_contract() {
         let layout = Vertex::layout();
-        let [position, color, normal] = layout.attributes else {
-            panic!("vertex layout must contain position, color, and normal attributes");
+        let [position, color, normal, debug_color, patch_uv] = layout.attributes else {
+            panic!("vertex layout must contain geometry and patch debug attributes");
         };
 
-        assert_eq!(layout.array_stride, 36);
+        assert_eq!(layout.array_stride, 56);
         assert_eq!(layout.step_mode, VertexStepMode::Vertex);
         assert_eq!(position.format, wgpu::VertexFormat::Float32x3);
         assert_eq!(position.offset, 0);
@@ -108,5 +120,11 @@ mod tests {
         assert_eq!(normal.format, wgpu::VertexFormat::Float32x3);
         assert_eq!(normal.offset, 24);
         assert_eq!(normal.shader_location, 2);
+        assert_eq!(debug_color.format, wgpu::VertexFormat::Float32x3);
+        assert_eq!(debug_color.offset, 36);
+        assert_eq!(debug_color.shader_location, 3);
+        assert_eq!(patch_uv.format, wgpu::VertexFormat::Float32x2);
+        assert_eq!(patch_uv.offset, 48);
+        assert_eq!(patch_uv.shader_location, 4);
     }
 }

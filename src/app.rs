@@ -38,12 +38,14 @@ impl WindowState {
         let window = Arc::new(event_loop.create_window(attributes)?);
         let renderer = Renderer::new(window.clone())?;
 
-        Ok(Self {
+        let state = Self {
             window,
             renderer,
             orbit_input: OrbitInput::default(),
             initial_redraw_pending: true,
-        })
+        };
+        state.update_title();
+        Ok(state)
     }
 
     fn id(&self) -> WindowId {
@@ -91,6 +93,31 @@ impl WindowState {
 
     fn reset_orbit_input(&mut self) {
         self.orbit_input.reset();
+    }
+
+    fn update_title(&self) {
+        let stats = self.renderer.terrain_stats();
+        self.window.set_title(&format!(
+            "{WINDOW_TITLE} | Level {} | Active patches: {} | Cached patches: {}",
+            stats.level, stats.active_patches, stats.cached_patches,
+        ));
+    }
+
+    fn key_pressed(&mut self, key: PhysicalKey) {
+        match key {
+            PhysicalKey::Code(KeyCode::KeyD) => {
+                self.renderer.toggle_patch_debug();
+                self.request_redraw();
+            }
+            PhysicalKey::Code(code @ (KeyCode::BracketLeft | KeyCode::BracketRight)) => {
+                let delta = if code == KeyCode::BracketLeft { -1 } else { 1 };
+                if self.renderer.change_terrain_level(delta) {
+                    self.update_title();
+                    self.request_redraw();
+                }
+            }
+            _ => {}
+        }
     }
 
     fn render(&mut self) -> Result<(), RendererError> {
@@ -161,12 +188,8 @@ impl ApplicationHandler for App {
                 event,
                 is_synthetic: false,
                 ..
-            } if event.state == ElementState::Pressed
-                && !event.repeat
-                && event.physical_key == PhysicalKey::Code(KeyCode::KeyD) =>
-            {
-                window_state.renderer.toggle_patch_debug();
-                window_state.request_redraw();
+            } if event.state == ElementState::Pressed && !event.repeat => {
+                window_state.key_pressed(event.physical_key);
             }
             WindowEvent::Resized(size) => window_state.resize(size),
             WindowEvent::RedrawRequested => {

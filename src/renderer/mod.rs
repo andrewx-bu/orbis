@@ -5,6 +5,8 @@ mod surface;
 mod terrain;
 mod terrain_mesh;
 
+pub use self::terrain_mesh::TerrainStats;
+
 use std::{error::Error, fmt, sync::Arc};
 
 use self::{
@@ -98,6 +100,14 @@ impl Renderer {
 
     pub fn toggle_patch_debug(&mut self) {
         self.patch_debug_enabled = !self.patch_debug_enabled;
+    }
+
+    pub fn change_terrain_level(&mut self, delta: i32) -> bool {
+        self.terrain_mesh.change_level(self.surface.device(), delta)
+    }
+
+    pub fn terrain_stats(&self) -> TerrainStats {
+        self.terrain_mesh.stats()
     }
 
     pub fn render(&mut self) -> Result<RenderOutcome, RendererError> {

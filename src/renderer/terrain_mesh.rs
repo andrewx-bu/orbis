@@ -247,6 +247,19 @@ pub(super) struct TerrainMesh {
     patches: PatchCache<GpuMesh>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct TerrainStats {
+    pub level: u32,
+    pub active_patches: usize,
+    pub cached_patches: usize,
+}
+
+fn adjusted_subdivision_level(level: u32, delta: i32) -> u32 {
+    level
+        .saturating_add_signed(delta)
+        .min(MAX_SUBDIVISION_LEVEL)
+}
+
 // Each cache belongs to one fixed terrain configuration and patch resolution.
 // Keeping the resource generic lets cache behavior be tested without a GPU.
 struct PatchCache<T> {
@@ -308,6 +321,20 @@ impl TerrainMesh {
         })
     }
 
+    pub(super) fn change_level(&mut self, device: &Device, delta: i32) -> bool {
+        let level = adjusted_subdivision_level(self.stats().level, delta);
+        self.set_level(device, level)
+    }
+
+    pub(super) fn stats(&self) -> TerrainStats {
+        TerrainStats {
+            // Construction selects a complete level before exposing this mesh.
+            level: self.patches.active[0].level,
+            active_patches: self.patches.active.len(),
+            cached_patches: self.patches.resident.len(),
+        }
+    }
+
     pub(super) fn draw<'pass>(&'pass self, render_pass: &mut RenderPass<'pass>) {
         for patch in &self.patches.active {
             self.patches.resident[patch].draw(render_pass);
@@ -318,6 +345,23 @@ impl TerrainMesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subdivision_adjustments_stay_within_supported_levels() {
+        for (level, delta, expected) in [
+            (0, -1, 0),
+            (0, 1, 1),
+            (1, -1, 0),
+            (1, 0, 1),
+            (1, 1, 2),
+            (2, -1, 1),
+            (2, 1, 2),
+            (1, i32::MIN, 0),
+            (1, i32::MAX, 2),
+        ] {
+            assert_eq!(adjusted_subdivision_level(level, delta), expected);
+        }
+    }
 
     #[test]
     fn patch_cache_reuses_resources_when_switching_levels() {

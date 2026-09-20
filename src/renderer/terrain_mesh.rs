@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use glam::Vec3;
 use wgpu::{Device, RenderPass};
 
@@ -22,7 +24,7 @@ const CUBE_FACES: [CubeFace; 6] = [
     CubeFace::Bottom,
 ];
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum CubeFace {
     Front,
     Back,
@@ -62,7 +64,7 @@ impl FaceBasis {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct PatchId {
     face: CubeFace,
     level: u32,
@@ -241,7 +243,39 @@ fn axis_coordinate(minimum: f32, maximum: f32, index: u32, resolution: u32) -> f
 }
 
 pub(super) struct TerrainMesh {
-    patches: Vec<GpuMesh>,
+    terrain: Terrain,
+    patches: PatchCache<GpuMesh>,
+}
+
+// Each cache belongs to one fixed terrain configuration and patch resolution.
+// Keeping the resource generic lets cache behavior be tested without a GPU.
+struct PatchCache<T> {
+    active: Vec<PatchId>,
+    resident: HashMap<PatchId, T>,
+}
+
+impl<T> PatchCache<T> {
+    fn new() -> Self {
+        Self {
+            active: Vec::new(),
+            resident: HashMap::new(),
+        }
+    }
+
+    fn set_level(&mut self, level: u32, mut generate: impl FnMut(PatchId) -> T) -> bool {
+        let active = uniform_patches(level);
+        if active == self.active {
+            return false;
+        }
+
+        for &patch in &active {
+            self.resident
+                .entry(patch)
+                .or_insert_with(|| generate(patch));
+        }
+        self.active = active;
+        true
+    }
 }
 
 fn uniform_patches(level: u32) -> Vec<PatchId> {
@@ -259,21 +293,24 @@ fn uniform_patches(level: u32) -> Vec<PatchId> {
 
 impl TerrainMesh {
     pub(super) fn new(device: &Device) -> Self {
-        let terrain = Terrain::new(DEFAULT_TERRAIN_SEED, PLANET_RADIUS, TERRAIN_MAX_ELEVATION);
-        let patches = uniform_patches(DEFAULT_SUBDIVISION_LEVEL)
-            .into_iter()
-            .map(|patch| {
-                let mesh = generate_patch(PATCH_RESOLUTION, terrain, patch);
-                GpuMesh::new(device, &mesh)
-            })
-            .collect();
+        let mut mesh = Self {
+            terrain: Terrain::new(DEFAULT_TERRAIN_SEED, PLANET_RADIUS, TERRAIN_MAX_ELEVATION),
+            patches: PatchCache::new(),
+        };
+        mesh.set_level(device, DEFAULT_SUBDIVISION_LEVEL);
+        mesh
+    }
 
-        Self { patches }
+    pub(super) fn set_level(&mut self, device: &Device, level: u32) -> bool {
+        self.patches.set_level(level, |patch| {
+            let mesh = generate_patch(PATCH_RESOLUTION, self.terrain, patch);
+            GpuMesh::new(device, &mesh)
+        })
     }
 
     pub(super) fn draw<'pass>(&'pass self, render_pass: &mut RenderPass<'pass>) {
-        for patch in &self.patches {
-            patch.draw(render_pass);
+        for patch in &self.patches.active {
+            self.patches.resident[patch].draw(render_pass);
         }
     }
 }
@@ -281,6 +318,51 @@ impl TerrainMesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn patch_cache_reuses_resources_when_switching_levels() {
+        let mut cache = PatchCache::new();
+        let mut generated = 0;
+        assert!(cache.set_level(1, |patch| {
+            generated += 1;
+            (patch, generated)
+        }));
+        let original_resources = cache.resident.clone();
+
+        for (level, active_count, resident_count) in [
+            (0, 6, 30),
+            (2, 96, 126),
+            (1, 24, 126),
+            (0, 6, 126),
+            (2, 96, 126),
+        ] {
+            assert!(cache.set_level(level, |patch| {
+                generated += 1;
+                (patch, generated)
+            }));
+            assert_eq!(cache.active, uniform_patches(level));
+            assert_eq!(cache.active.len(), active_count);
+            assert_eq!(cache.resident.len(), resident_count);
+            assert_eq!(generated, resident_count);
+            for patch in &cache.active {
+                assert_eq!(cache.resident[patch].0, *patch);
+            }
+            for (patch, resource) in &original_resources {
+                assert_eq!(&cache.resident[patch], resource);
+            }
+        }
+    }
+
+    #[test]
+    fn selecting_the_current_level_does_not_generate_resources() {
+        let mut cache = PatchCache::new();
+        assert!(cache.set_level(DEFAULT_SUBDIVISION_LEVEL, |_| ()));
+        assert!(!cache.set_level(DEFAULT_SUBDIVISION_LEVEL, |_| {
+            panic!("the current level must already be cached")
+        }));
+        assert_eq!(cache.resident.len(), 24);
+        assert_eq!(cache.active, uniform_patches(DEFAULT_SUBDIVISION_LEVEL));
+    }
 
     fn root_patch_meshes(resolution: u32, terrain: Terrain) -> Vec<MeshData> {
         CUBE_FACES

@@ -7,6 +7,8 @@ use super::{
 };
 
 const PATCH_RESOLUTION: u32 = 32;
+const DEFAULT_SUBDIVISION_LEVEL: u32 = 1;
+const MAX_SUBDIVISION_LEVEL: u32 = 2;
 const PLANET_RADIUS: f32 = 0.6;
 const TERRAIN_COLOR: [f32; 3] = [0.2, 0.7, 0.35];
 const DEFAULT_TERRAIN_SEED: u32 = 0;
@@ -242,16 +244,24 @@ pub(super) struct TerrainMesh {
     patches: Vec<GpuMesh>,
 }
 
-fn initial_patches() -> impl Iterator<Item = PatchId> {
-    CUBE_FACES
-        .into_iter()
-        .flat_map(|face| PatchId::root(face).children())
+fn uniform_patches(level: u32) -> Vec<PatchId> {
+    assert!(
+        level <= MAX_SUBDIVISION_LEVEL,
+        "terrain subdivision level exceeds the supported maximum"
+    );
+
+    let mut patches: Vec<_> = CUBE_FACES.into_iter().map(PatchId::root).collect();
+    for _ in 0..level {
+        patches = patches.into_iter().flat_map(PatchId::children).collect();
+    }
+    patches
 }
 
 impl TerrainMesh {
     pub(super) fn new(device: &Device) -> Self {
         let terrain = Terrain::new(DEFAULT_TERRAIN_SEED, PLANET_RADIUS, TERRAIN_MAX_ELEVATION);
-        let patches = initial_patches()
+        let patches = uniform_patches(DEFAULT_SUBDIVISION_LEVEL)
+            .into_iter()
             .map(|patch| {
                 let mesh = generate_patch(PATCH_RESOLUTION, terrain, patch);
                 GpuMesh::new(device, &mesh)
@@ -339,31 +349,54 @@ mod tests {
     }
 
     #[test]
-    fn initial_patches_cover_every_face_at_the_original_triangle_count() {
-        let patches: Vec<_> = initial_patches().collect();
-        assert_eq!(patches.len(), 24);
+    fn uniform_patches_cover_every_face_at_each_supported_level() {
+        for (level, expected_count) in [(0, 6), (1, 24), (2, 96)] {
+            let patches = uniform_patches(level);
+            assert_eq!(patches.len(), expected_count);
+            let edge_count = patches_per_edge(level);
+            let width = 2.0 / edge_count as f32;
 
-        for face in CUBE_FACES {
-            for y in 0..2 {
-                for x in 0..2 {
-                    let expected = PatchId::new(face, 1, x, y);
-                    assert_eq!(
-                        patches.iter().filter(|&&patch| patch == expected).count(),
-                        1
-                    );
+            for face in CUBE_FACES {
+                for y in 0..edge_count {
+                    for x in 0..edge_count {
+                        let expected = PatchId::new(face, level, x, y);
+                        assert_eq!(
+                            patches.iter().filter(|&&patch| patch == expected).count(),
+                            1
+                        );
+                        assert_eq!(
+                            expected.bounds(),
+                            PatchBounds {
+                                minimum_horizontal: -1.0 + x as f32 * width,
+                                maximum_horizontal: -1.0 + (x + 1) as f32 * width,
+                                minimum_vertical: -1.0 + y as f32 * width,
+                                maximum_vertical: -1.0 + (y + 1) as f32 * width,
+                            }
+                        );
+                    }
                 }
             }
         }
+    }
 
+    #[test]
+    fn default_subdivision_preserves_the_original_triangle_count() {
+        let patches = uniform_patches(DEFAULT_SUBDIVISION_LEVEL);
         let triangle_count =
             patches.len() * patch_mesh_counts(PATCH_RESOLUTION).index_count as usize / 3;
         assert_eq!(triangle_count, 6 * 64 * 64 * 2);
     }
 
     #[test]
+    #[should_panic(expected = "terrain subdivision level exceeds the supported maximum")]
+    fn uniform_patches_reject_levels_above_the_limit() {
+        uniform_patches(MAX_SUBDIVISION_LEVEL + 1);
+    }
+
+    #[test]
     fn patch_debug_attributes_identify_patches_and_their_boundaries() {
         const RESOLUTION: u32 = 4;
-        let patches: Vec<_> = initial_patches().collect();
+        let patches = uniform_patches(DEFAULT_SUBDIVISION_LEVEL);
         let terrain = Terrain::new(42, PLANET_RADIUS, TERRAIN_MAX_ELEVATION);
 
         for (index, &patch) in patches.iter().enumerate() {
@@ -553,13 +586,16 @@ mod tests {
     }
 
     #[test]
-    fn initial_patch_boundaries_share_positions_and_normals() {
+    fn uniform_patch_boundaries_share_positions_and_normals_at_each_supported_level() {
         const RESOLUTION: u32 = 8;
         let terrain = Terrain::new(42, PLANET_RADIUS, TERRAIN_MAX_ELEVATION);
-        let meshes: Vec<_> = initial_patches()
-            .map(|patch| generate_patch(RESOLUTION, terrain, patch))
-            .collect();
-        assert_patch_boundaries_match(&meshes, RESOLUTION);
+        for level in 0..=MAX_SUBDIVISION_LEVEL {
+            let meshes: Vec<_> = uniform_patches(level)
+                .into_iter()
+                .map(|patch| generate_patch(RESOLUTION, terrain, patch))
+                .collect();
+            assert_patch_boundaries_match(&meshes, RESOLUTION);
+        }
     }
 
     fn assert_patch_boundaries_match(meshes: &[MeshData], resolution: u32) {

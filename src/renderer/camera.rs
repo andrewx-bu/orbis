@@ -13,6 +13,8 @@ use wgpu::{
 };
 use winit::dpi::PhysicalSize;
 
+use super::terrain_mesh::LodView;
+
 const DEFAULT_ASPECT_RATIO: f32 = 1.0;
 const NEAR_PLANE: f32 = 0.1;
 const FAR_PLANE: f32 = 100.0;
@@ -96,6 +98,18 @@ impl Camera {
                 self.pitch.sin() * self.distance,
                 self.yaw.cos() * horizontal_distance,
             )
+    }
+
+    fn lod_view(&self, size: PhysicalSize<u32>) -> Option<LodView> {
+        aspect_ratio(size)?;
+        let eye = self.eye();
+        Some(LodView {
+            eye,
+            forward: (self.target - eye).normalize(),
+            vertical_field_of_view: self.field_of_view_y,
+            viewport_height: size.height,
+            near_plane: self.near_plane,
+        })
     }
 
     fn view_projection(&self) -> Mat4 {
@@ -203,6 +217,10 @@ impl CameraResources {
         true
     }
 
+    pub(super) fn lod_view(&self, size: PhysicalSize<u32>) -> Option<LodView> {
+        self.camera.lod_view(size)
+    }
+
     pub(super) fn bind_group_layout(&self) -> &BindGroupLayout {
         &self.bind_group_layout
     }
@@ -226,6 +244,30 @@ mod tests {
             actual.abs_diff_eq(expected, 1.0e-6),
             "expected {expected:?}, got {actual:?}"
         );
+    }
+
+    #[test]
+    fn lod_view_matches_camera_and_tracks_physical_viewport_height() {
+        let mut camera = Camera::new(PhysicalSize::new(1280, 720));
+        camera.orbit(Vec2::new(50.0, -20.0));
+        camera.zoom(2.0);
+        let view = camera.lod_view(PhysicalSize::new(1280, 720)).unwrap();
+        assert_vec3_close(view.eye, camera.eye());
+        assert_vec3_close(view.forward, (camera.target - camera.eye()).normalize());
+        assert_eq!(view.vertical_field_of_view, camera.field_of_view_y);
+        assert_eq!(view.near_plane, camera.near_plane);
+        assert_eq!(view.viewport_height, 720);
+        camera.resize(PhysicalSize::new(2560, 1440));
+        assert_eq!(
+            camera
+                .lod_view(PhysicalSize::new(2560, 1440))
+                .unwrap()
+                .viewport_height,
+            1440
+        );
+        assert!(camera.lod_view(PhysicalSize::new(0, 720)).is_none());
+        assert!(camera.lod_view(PhysicalSize::new(1280, 0)).is_none());
+        assert!(camera.lod_view(PhysicalSize::new(0, 0)).is_none());
     }
 
     #[test]

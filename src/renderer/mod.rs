@@ -71,7 +71,8 @@ impl Renderer {
             lighting.bind_group_layout(),
             "fragment_patch_debug",
         );
-        let terrain_mesh = TerrainMesh::new(surface.device());
+        let terrain_mesh =
+            TerrainMesh::new(surface.device(), camera.lod_view(surface.size()).as_ref());
 
         Ok(Self {
             surface,
@@ -110,12 +111,24 @@ impl Renderer {
         self.terrain_mesh.stats()
     }
 
+    pub fn toggle_automatic_terrain(&mut self) {
+        self.terrain_mesh.toggle_automatic(
+            self.surface.device(),
+            self.camera.lod_view(self.surface.size()).as_ref(),
+        );
+    }
+
     pub fn render(&mut self) -> Result<RenderOutcome, RendererError> {
         let frame = match self.surface.acquire_frame()? {
             FrameAcquisition::Ready(frame) => frame,
             FrameAcquisition::Retry => return Ok(RenderOutcome::Retry),
             FrameAcquisition::Wait => return Ok(RenderOutcome::Skipped),
         };
+        // Select once per frame so multiple input events share one terrain update.
+        self.terrain_mesh.update(
+            self.surface.device(),
+            self.camera.lod_view(self.surface.size()).as_ref(),
+        );
         let view = frame
             .texture()
             .create_view(&TextureViewDescriptor::default());

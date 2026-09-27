@@ -1,5 +1,10 @@
 use std::collections::HashMap;
 
+mod lod;
+
+use self::lod::LodSelector;
+pub(super) use self::lod::LodView;
+
 use glam::Vec3;
 use wgpu::{Device, RenderPass};
 
@@ -107,7 +112,15 @@ impl PatchId {
             hash ^= hash >> 16;
         }
 
-        [0, 8, 16].map(|shift| 0.25 + ((hash >> shift) & 0xff) as f32 / 255.0 * 0.65)
+        // Level hue stays recognizable; small variations identify individual patches.
+        let base = match self.level {
+            0 => [0.25, 0.35, 0.7],
+            1 => [0.25, 0.7, 0.25],
+            _ => [0.7, 0.4, 0.25],
+        };
+        std::array::from_fn(|channel| {
+            base[channel] + ((hash >> (channel * 8)) & 0xff) as f32 / 255.0 * 0.15
+        })
     }
 
     fn bounds(self) -> PatchBounds {
@@ -190,7 +203,47 @@ fn generate_patch(resolution: u32, terrain: Terrain, patch: PatchId) -> MeshData
         }
     }
 
+    // Even the coarsest cube-face triangle lies outside minimum_radius / sqrt(3).
+    // End skirts below that bound so any supported pair of levels can meet.
+    let skirt_radius = terrain.minimum_radius() * 0.5;
+    let boundary = patch_boundary(resolution);
+    let skirt_start = vertices.len() as u32;
+    for &index in &boundary {
+        let mut vertex = vertices[index as usize];
+        vertex.position = (Vec3::from_array(vertex.position).normalize() * skirt_radius).to_array();
+        vertices.push(vertex);
+    }
+    for edge in 0..boundary.len() {
+        let next = (edge + 1) % boundary.len();
+        let first = boundary[edge];
+        let second = boundary[next];
+        let lower_first = skirt_start + edge as u32;
+        let lower_second = skirt_start + next as u32;
+        indices.extend_from_slice(&[
+            first,
+            lower_first,
+            second,
+            second,
+            lower_first,
+            lower_second,
+        ]);
+    }
+
     MeshData::new(vertices, indices)
+}
+
+// Counterclockwise around the surface, with each corner included exactly once.
+fn patch_boundary(resolution: u32) -> Vec<u32> {
+    let edge = resolution + 1;
+    (0..resolution)
+        .chain((0..resolution).map(|row| row * edge + resolution))
+        .chain(
+            (1..=resolution)
+                .rev()
+                .map(|column| resolution * edge + column),
+        )
+        .chain((1..=resolution).rev().map(|row| row * edge))
+        .collect()
 }
 
 struct PatchMeshCounts {
@@ -207,10 +260,12 @@ fn patch_mesh_counts(resolution: u32) -> PatchMeshCounts {
         .expect("terrain patch resolution exceeds the supported vertex count");
     let vertex_count = vertices_per_edge
         .checked_mul(vertices_per_edge)
+        .and_then(|surface_count| resolution.checked_mul(4)?.checked_add(surface_count))
         .expect("terrain patch resolution exceeds the supported vertex count");
     let index_count = resolution
         .checked_mul(resolution)
         .and_then(|quad_count| quad_count.checked_mul(6))
+        .and_then(|surface_count| resolution.checked_mul(24)?.checked_add(surface_count))
         .expect("terrain patch resolution exceeds the supported index count");
 
     PatchMeshCounts {
@@ -245,13 +300,52 @@ fn axis_coordinate(minimum: f32, maximum: f32, index: u32, resolution: u32) -> f
 pub(super) struct TerrainMesh {
     terrain: Terrain,
     patches: PatchCache<GpuMesh>,
+    selection: TerrainSelection,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TerrainStats {
-    pub level: u32,
+    pub automatic: bool,
+    pub minimum_level: u32,
+    pub maximum_level: u32,
     pub active_patches: usize,
     pub cached_patches: usize,
+}
+
+struct TerrainSelection {
+    automatic: bool,
+    manual_level: u32,
+    lod: LodSelector,
+}
+
+impl TerrainSelection {
+    fn new(terrain: Terrain) -> Self {
+        Self {
+            automatic: true,
+            manual_level: DEFAULT_SUBDIVISION_LEVEL,
+            lod: LodSelector::new(terrain, PLANET_RADIUS, TERRAIN_MAX_ELEVATION),
+        }
+    }
+
+    fn select(&mut self, view: Option<&LodView>) -> Option<Vec<PatchId>> {
+        if self.automatic {
+            view.map(|view| self.lod.select(view))
+        } else {
+            Some(uniform_patches(self.manual_level))
+        }
+    }
+
+    fn toggle(&mut self) {
+        self.automatic = !self.automatic;
+    }
+
+    fn change_level(&mut self, delta: i32) -> bool {
+        let level = adjusted_subdivision_level(self.manual_level, delta);
+        let changed = self.automatic || level != self.manual_level;
+        self.automatic = false;
+        self.manual_level = level;
+        changed
+    }
 }
 
 fn adjusted_subdivision_level(level: u32, delta: i32) -> u32 {
@@ -275,8 +369,18 @@ impl<T> PatchCache<T> {
         }
     }
 
-    fn set_level(&mut self, level: u32, mut generate: impl FnMut(PatchId) -> T) -> bool {
-        let active = uniform_patches(level);
+    #[cfg(test)]
+    fn set_level(&mut self, level: u32, generate: impl FnMut(PatchId) -> T) -> bool {
+        self.set_active(uniform_patches(level), generate)
+    }
+
+    fn set_active(&mut self, active: Vec<PatchId>, mut generate: impl FnMut(PatchId) -> T) -> bool {
+        assert!(
+            active
+                .iter()
+                .all(|patch| patch.level <= MAX_SUBDIVISION_LEVEL),
+            "terrain subdivision level exceeds the supported maximum"
+        );
         if active == self.active {
             return false;
         }
@@ -305,31 +409,64 @@ fn uniform_patches(level: u32) -> Vec<PatchId> {
 }
 
 impl TerrainMesh {
-    pub(super) fn new(device: &Device) -> Self {
+    pub(super) fn new(device: &Device, view: Option<&LodView>) -> Self {
+        let terrain = Terrain::new(DEFAULT_TERRAIN_SEED, PLANET_RADIUS, TERRAIN_MAX_ELEVATION);
         let mut mesh = Self {
-            terrain: Terrain::new(DEFAULT_TERRAIN_SEED, PLANET_RADIUS, TERRAIN_MAX_ELEVATION),
+            terrain,
             patches: PatchCache::new(),
+            selection: TerrainSelection::new(terrain),
         };
-        mesh.set_level(device, DEFAULT_SUBDIVISION_LEVEL);
+        let active = mesh
+            .selection
+            .select(view)
+            .unwrap_or_else(|| uniform_patches(DEFAULT_SUBDIVISION_LEVEL));
+        mesh.set_active(device, active);
         mesh
     }
 
-    pub(super) fn set_level(&mut self, device: &Device, level: u32) -> bool {
-        self.patches.set_level(level, |patch| {
+    fn set_active(&mut self, device: &Device, active: Vec<PatchId>) -> bool {
+        self.patches.set_active(active, |patch| {
             let mesh = generate_patch(PATCH_RESOLUTION, self.terrain, patch);
             GpuMesh::new(device, &mesh)
         })
     }
 
     pub(super) fn change_level(&mut self, device: &Device, delta: i32) -> bool {
-        let level = adjusted_subdivision_level(self.stats().level, delta);
-        self.set_level(device, level)
+        let changed = self.selection.change_level(delta);
+        self.update(device, None);
+        changed
+    }
+
+    pub(super) fn toggle_automatic(&mut self, device: &Device, view: Option<&LodView>) {
+        self.selection.toggle();
+        self.update(device, view);
+    }
+
+    pub(super) fn update(&mut self, device: &Device, view: Option<&LodView>) -> bool {
+        let Some(active) = self.selection.select(view) else {
+            return false;
+        };
+        self.set_active(device, active)
     }
 
     pub(super) fn stats(&self) -> TerrainStats {
         TerrainStats {
-            // Construction selects a complete level before exposing this mesh.
-            level: self.patches.active[0].level,
+            automatic: self.selection.automatic,
+            // Construction selects a complete cover before exposing this mesh.
+            minimum_level: self
+                .patches
+                .active
+                .iter()
+                .map(|patch| patch.level)
+                .min()
+                .unwrap(),
+            maximum_level: self
+                .patches
+                .active
+                .iter()
+                .map(|patch| patch.level)
+                .max()
+                .unwrap(),
             active_patches: self.patches.active.len(),
             cached_patches: self.patches.resident.len(),
         }
@@ -345,6 +482,241 @@ impl TerrainMesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn selection_view(distance: f32, viewport_height: u32) -> LodView {
+        LodView {
+            eye: Vec3::new(1.5, 1.0, 2.0).normalize() * distance,
+            forward: -Vec3::new(1.5, 1.0, 2.0).normalize(),
+            vertical_field_of_view: std::f32::consts::FRAC_PI_4,
+            viewport_height,
+            near_plane: 0.1,
+        }
+    }
+
+    fn selection() -> TerrainSelection {
+        TerrainSelection::new(Terrain::new(
+            DEFAULT_TERRAIN_SEED,
+            PLANET_RADIUS,
+            TERRAIN_MAX_ELEVATION,
+        ))
+    }
+
+    #[test]
+    fn automatic_selection_responds_to_real_camera_distances_and_viewport_sizes() {
+        let mut selection = selection();
+        let far = selection.select(Some(&selection_view(25.0, 720))).unwrap();
+        assert_eq!(far, uniform_patches(0));
+        let near = selection.select(Some(&selection_view(1.25, 720))).unwrap();
+        assert!(near.len() > far.len());
+        assert!(near.iter().any(|patch| patch.level != near[0].level));
+        let large = selection.select(Some(&selection_view(1.25, 2880))).unwrap();
+        assert!(large.len() > near.len());
+        // A minimized window supplies no view and preserves the previous selection.
+        assert!(selection.select(None).is_none());
+        assert_eq!(
+            selection.select(Some(&selection_view(1.25, 2880))).unwrap(),
+            large
+        );
+    }
+
+    #[test]
+    fn manual_controls_restore_the_remembered_level_and_ignore_camera_changes() {
+        let mut selection = selection();
+        let near = selection_view(1.25, 1440);
+        assert!(selection.automatic);
+        selection.select(Some(&near));
+        selection.toggle();
+        assert!(!selection.automatic);
+        assert_eq!(selection.select(None).unwrap(), uniform_patches(1));
+        assert!(selection.change_level(1));
+        assert_eq!(selection.select(Some(&near)).unwrap(), uniform_patches(2));
+        assert!(!selection.change_level(1));
+        selection.toggle();
+        assert!(selection.automatic);
+        selection.select(Some(&near));
+        selection.toggle();
+        assert_eq!(selection.select(None).unwrap(), uniform_patches(2));
+        selection.toggle();
+        // Even a clamped bracket input must leave automatic mode.
+        assert!(selection.change_level(1));
+        assert!(!selection.automatic);
+        assert_eq!(selection.select(None).unwrap(), uniform_patches(2));
+        assert!(selection.change_level(-1));
+        assert_eq!(selection.select(Some(&near)).unwrap(), uniform_patches(1));
+    }
+
+    #[test]
+    fn automatic_and_manual_selection_share_the_bounded_cache() {
+        let mut selection = selection();
+        let mut cache = PatchCache::new();
+        let mut generated = 0;
+        for _ in 0..2 {
+            for distance in [25.0, 4.0, 2.0, 1.25, 2.0, 25.0] {
+                let active = selection
+                    .select(Some(&selection_view(distance, 1440)))
+                    .unwrap();
+                cache.set_active(active, |patch| {
+                    generated += 1;
+                    patch
+                });
+            }
+            selection.toggle();
+            for delta in [-1, 1, 1] {
+                selection.change_level(delta);
+                cache.set_active(selection.select(None).unwrap(), |patch| {
+                    generated += 1;
+                    patch
+                });
+            }
+            selection.toggle();
+            assert_eq!(generated, cache.resident.len());
+            assert!(cache.resident.len() <= 126);
+        }
+        assert!(
+            cache
+                .active
+                .iter()
+                .all(|patch| cache.resident[patch] == *patch)
+        );
+    }
+
+    #[test]
+    fn debug_hues_identify_each_supported_level() {
+        for level in 0..=MAX_SUBDIVISION_LEVEL {
+            for patch in uniform_patches(level) {
+                let [red, green, blue] = patch.debug_color();
+                assert!(match level {
+                    0 => blue > red && blue > green,
+                    1 => green > red && green > blue,
+                    _ => red > green && green > blue,
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_level_selection_reuses_cached_parents_and_children() {
+        let mut cache = PatchCache::new();
+        let mut generated = 0;
+        cache.set_level(0, |_| {
+            generated += 1;
+            generated
+        });
+        let roots = cache.resident.clone();
+        let mut mixed = uniform_patches(0);
+        let parent = mixed.remove(0);
+        mixed.extend(parent.children());
+        let child = mixed.remove(5);
+        mixed.extend(child.children());
+        assert!(cache.set_active(mixed.clone(), |_| {
+            generated += 1;
+            generated
+        }));
+        assert_eq!(cache.active.len(), 12);
+        assert_eq!(generated, 13);
+        assert!(
+            cache
+                .active
+                .iter()
+                .all(|patch| cache.resident.contains_key(patch))
+        );
+        assert!(!cache.active.contains(&parent));
+        assert!(!cache.active.contains(&child));
+        let resources = cache.resident.clone();
+        assert!(!cache.set_active(mixed.clone(), |_| panic!("selection is already cached")));
+        assert!(cache.set_level(0, |_| panic!("roots are already cached")));
+        for (patch, resource) in roots {
+            assert_eq!(cache.resident[&patch], resource);
+        }
+        assert!(cache.set_active(mixed, |_| panic!("mixed selection is already cached")));
+        assert_eq!(cache.resident, resources);
+    }
+
+    #[test]
+    #[should_panic(expected = "terrain subdivision level exceeds the supported maximum")]
+    fn mixed_selection_rejects_levels_above_cache_limit() {
+        PatchCache::new().set_active(
+            vec![PatchId::new(
+                CubeFace::Front,
+                MAX_SUBDIVISION_LEVEL + 1,
+                0,
+                0,
+            )],
+            |_| (),
+        );
+    }
+
+    #[test]
+    fn skirts_close_every_boundary_with_consistent_winding() {
+        let terrain = Terrain::new(42, PLANET_RADIUS, TERRAIN_MAX_ELEVATION);
+        for resolution in [1, 4] {
+            let surface_vertices = ((resolution + 1) * (resolution + 1)) as usize;
+            let surface_indices = (resolution * resolution * 6) as usize;
+            for level in 0..=MAX_SUBDIVISION_LEVEL {
+                for patch in uniform_patches(level) {
+                    let mesh = generate_patch(resolution, terrain, patch);
+                    let boundary = patch_boundary(resolution);
+                    let unique: std::collections::HashSet<_> = boundary.iter().collect();
+                    assert_eq!(unique.len(), 4 * resolution as usize);
+                    for (offset, &top_index) in boundary.iter().enumerate() {
+                        let top = mesh.vertices[top_index as usize];
+                        let bottom = mesh.vertices[surface_vertices + offset];
+                        let top_position = Vec3::from_array(top.position);
+                        let bottom_position = Vec3::from_array(bottom.position);
+                        assert!(bottom_position.is_finite());
+                        assert!(
+                            bottom_position.length() < terrain.minimum_radius() / 3.0_f32.sqrt()
+                        );
+                        assert!(
+                            top_position
+                                .normalize()
+                                .abs_diff_eq(bottom_position.normalize(), 1.0e-6)
+                        );
+                        assert_eq!(bottom.normal, top.normal);
+                        assert_eq!(bottom.color, top.color);
+                        assert_eq!(bottom.debug_color, top.debug_color);
+                        assert_eq!(bottom.patch_uv, top.patch_uv);
+                        let next_top = Vec3::from_array(
+                            mesh.vertices[boundary[(offset + 1) % boundary.len()] as usize]
+                                .position,
+                        );
+                        let outward = (next_top - top_position).cross(top_position);
+                        for triangle in mesh.indices
+                            [surface_indices + offset * 6..surface_indices + (offset + 1) * 6]
+                            .as_chunks::<3>()
+                            .0
+                        {
+                            let [a, b, c] = [triangle[0], triangle[1], triangle[2]].map(|index| {
+                                Vec3::from_array(mesh.vertices[index as usize].position)
+                            });
+                            assert!((b - a).cross(c - a).dot(outward) > 0.0);
+                        }
+                    }
+
+                    // Every edge above the skirt floor has two oppositely wound
+                    // triangles, including the corners and surface/skirt joins.
+                    let mut edges = HashMap::<_, Vec<_>>::new();
+                    for triangle in mesh.indices.as_chunks::<3>().0 {
+                        for (a, b) in [
+                            (triangle[0], triangle[1]),
+                            (triangle[1], triangle[2]),
+                            (triangle[2], triangle[0]),
+                        ] {
+                            edges.entry((a.min(b), a.max(b))).or_default().push((a, b));
+                        }
+                    }
+                    for ((a, b), directions) in edges {
+                        if a as usize >= surface_vertices && b as usize >= surface_vertices {
+                            assert_eq!(directions.len(), 1);
+                        } else {
+                            assert_eq!(directions.len(), 2);
+                            assert_eq!(directions[0], (directions[1].1, directions[1].0));
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn subdivision_adjustments_stay_within_supported_levels() {
@@ -506,11 +878,11 @@ mod tests {
     }
 
     #[test]
-    fn default_subdivision_preserves_the_original_triangle_count() {
+    fn default_subdivision_adds_only_boundary_skirt_triangles() {
         let patches = uniform_patches(DEFAULT_SUBDIVISION_LEVEL);
         let triangle_count =
             patches.len() * patch_mesh_counts(PATCH_RESOLUTION).index_count as usize / 3;
-        assert_eq!(triangle_count, 6 * 64 * 64 * 2);
+        assert_eq!(triangle_count, 6 * 64 * 64 * 2 + 24 * 32 * 8);
     }
 
     #[test]
@@ -597,8 +969,8 @@ mod tests {
     fn root_patches_have_expected_geometry() {
         const RESOLUTION: u32 = 4;
         let meshes = root_patch_meshes(RESOLUTION, Terrain::new(0, 2.5, 0.0));
-        let vertices_per_face = ((RESOLUTION + 1) * (RESOLUTION + 1)) as usize;
-        let indices_per_face = (RESOLUTION * RESOLUTION * 6) as usize;
+        let vertices_per_face = ((RESOLUTION + 1) * (RESOLUTION + 1) + 4 * RESOLUTION) as usize;
+        let indices_per_face = (RESOLUTION * RESOLUTION * 6 + 24 * RESOLUTION) as usize;
 
         assert_eq!(meshes.len(), CUBE_FACES.len());
         for mesh in meshes {
@@ -623,9 +995,12 @@ mod tests {
 
         assert_eq!(
             mesh.vertices.len(),
-            ((RESOLUTION + 1) * (RESOLUTION + 1)) as usize
+            ((RESOLUTION + 1) * (RESOLUTION + 1) + 4 * RESOLUTION) as usize
         );
-        assert_eq!(mesh.indices.len(), (RESOLUTION * RESOLUTION * 6) as usize);
+        assert_eq!(
+            mesh.indices.len(),
+            (RESOLUTION * RESOLUTION * 6 + 24 * RESOLUTION) as usize
+        );
         assert!(
             mesh.indices
                 .iter()
@@ -662,16 +1037,21 @@ mod tests {
         const MAX_ELEVATION: f32 = 0.2;
         let meshes = root_patch_meshes(8, Terrain::new(0, RADIUS, MAX_ELEVATION));
 
-        assert!(meshes.iter().flat_map(|mesh| &mesh.vertices).all(|vertex| {
-            let position = Vec3::from_array(vertex.position);
-            let normal = Vec3::from_array(vertex.normal);
-            position.is_finite()
-                && ((RADIUS - MAX_ELEVATION)..=(RADIUS + MAX_ELEVATION))
-                    .contains(&position.length())
-                && normal.is_finite()
-                && normal.is_normalized()
-                && normal.dot(position.normalize()) > 0.0
-        }));
+        assert!(
+            meshes
+                .iter()
+                .flat_map(|mesh| &mesh.vertices[..9 * 9])
+                .all(|vertex| {
+                    let position = Vec3::from_array(vertex.position);
+                    let normal = Vec3::from_array(vertex.normal);
+                    position.is_finite()
+                        && ((RADIUS - MAX_ELEVATION)..=(RADIUS + MAX_ELEVATION))
+                            .contains(&position.length())
+                        && normal.is_finite()
+                        && normal.is_normalized()
+                        && normal.dot(position.normalize()) > 0.0
+                })
+        );
     }
 
     #[test]
@@ -679,7 +1059,7 @@ mod tests {
         let meshes = root_patch_meshes(8, Terrain::new(0, 2.5, 0.2));
 
         for mesh in meshes {
-            let (triangles, remainder) = mesh.indices.as_chunks::<3>();
+            let (triangles, remainder) = mesh.indices[..8 * 8 * 6].as_chunks::<3>();
             assert!(remainder.is_empty());
 
             for &[first, second, third] in triangles {

@@ -29,7 +29,9 @@ Keep implementations simple and observable while the rendering foundation is sti
 │       ├── shader.wgsl           # GPU shader entry points and interfaces
 │       ├── surface.rs            # GPU and presentation-surface lifecycle
 │       ├── terrain.rs            # Deterministic terrain sampling and normals
-│       └── terrain_mesh.rs       # Terrain patch addressing and mesh generation
+│       ├── terrain_mesh.rs       # Terrain patch addressing, mesh generation, and caching
+│       └── terrain_mesh/
+│           └── lod.rs            # Geometric error estimates and camera-driven LOD selection
 ├── Cargo.lock                    # Locked dependency versions
 ├── Cargo.toml                    # Package metadata and dependencies
 ├── justfile                      # Common development commands
@@ -51,6 +53,7 @@ Keep WGSL shader entry points and GPU interface definitions in `src/renderer/sha
 Keep GPU initialization, surface recovery, resizing, and presentation in `src/renderer/surface.rs`.
 Keep deterministic terrain sampling and normal generation in `src/renderer/terrain.rs`.
 Keep cube-face patch addressing and terrain mesh generation in `src/renderer/terrain_mesh.rs`.
+Keep geometric error estimation and camera-driven quadtree selection in `src/renderer/terrain_mesh/lod.rs`.
 Add modules only when a concrete responsibility needs its own boundary.
 Keep the project as one crate until multiple crates provide a clear architectural benefit.
 

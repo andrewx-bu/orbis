@@ -194,7 +194,47 @@ fn generate_patch(resolution: u32, terrain: Terrain, patch: PatchId) -> MeshData
         }
     }
 
+    // Even the coarsest cube-face triangle lies outside minimum_radius / sqrt(3).
+    // End skirts below that bound so any supported pair of levels can meet.
+    let skirt_radius = terrain.minimum_radius() * 0.5;
+    let boundary = patch_boundary(resolution);
+    let skirt_start = vertices.len() as u32;
+    for &index in &boundary {
+        let mut vertex = vertices[index as usize];
+        vertex.position = (Vec3::from_array(vertex.position).normalize() * skirt_radius).to_array();
+        vertices.push(vertex);
+    }
+    for edge in 0..boundary.len() {
+        let next = (edge + 1) % boundary.len();
+        let first = boundary[edge];
+        let second = boundary[next];
+        let lower_first = skirt_start + edge as u32;
+        let lower_second = skirt_start + next as u32;
+        indices.extend_from_slice(&[
+            first,
+            lower_first,
+            second,
+            second,
+            lower_first,
+            lower_second,
+        ]);
+    }
+
     MeshData::new(vertices, indices)
+}
+
+// Counterclockwise around the surface, with each corner included exactly once.
+fn patch_boundary(resolution: u32) -> Vec<u32> {
+    let edge = resolution + 1;
+    (0..resolution)
+        .chain((0..resolution).map(|row| row * edge + resolution))
+        .chain(
+            (1..=resolution)
+                .rev()
+                .map(|column| resolution * edge + column),
+        )
+        .chain((1..=resolution).rev().map(|row| row * edge))
+        .collect()
 }
 
 struct PatchMeshCounts {
@@ -211,10 +251,12 @@ fn patch_mesh_counts(resolution: u32) -> PatchMeshCounts {
         .expect("terrain patch resolution exceeds the supported vertex count");
     let vertex_count = vertices_per_edge
         .checked_mul(vertices_per_edge)
+        .and_then(|surface_count| resolution.checked_mul(4)?.checked_add(surface_count))
         .expect("terrain patch resolution exceeds the supported vertex count");
     let index_count = resolution
         .checked_mul(resolution)
         .and_then(|quad_count| quad_count.checked_mul(6))
+        .and_then(|surface_count| resolution.checked_mul(24)?.checked_add(surface_count))
         .expect("terrain patch resolution exceeds the supported index count");
 
     PatchMeshCounts {
@@ -279,8 +321,17 @@ impl<T> PatchCache<T> {
         }
     }
 
-    fn set_level(&mut self, level: u32, mut generate: impl FnMut(PatchId) -> T) -> bool {
-        let active = uniform_patches(level);
+    fn set_level(&mut self, level: u32, generate: impl FnMut(PatchId) -> T) -> bool {
+        self.set_active(uniform_patches(level), generate)
+    }
+
+    fn set_active(&mut self, active: Vec<PatchId>, mut generate: impl FnMut(PatchId) -> T) -> bool {
+        assert!(
+            active
+                .iter()
+                .all(|patch| patch.level <= MAX_SUBDIVISION_LEVEL),
+            "terrain subdivision level exceeds the supported maximum"
+        );
         if active == self.active {
             return false;
         }
@@ -349,6 +400,130 @@ impl TerrainMesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mixed_level_selection_reuses_cached_parents_and_children() {
+        let mut cache = PatchCache::new();
+        let mut generated = 0;
+        cache.set_level(0, |_| {
+            generated += 1;
+            generated
+        });
+        let roots = cache.resident.clone();
+        let mut mixed = uniform_patches(0);
+        let parent = mixed.remove(0);
+        mixed.extend(parent.children());
+        let child = mixed.remove(5);
+        mixed.extend(child.children());
+        assert!(cache.set_active(mixed.clone(), |_| {
+            generated += 1;
+            generated
+        }));
+        assert_eq!(cache.active.len(), 12);
+        assert_eq!(generated, 13);
+        assert!(
+            cache
+                .active
+                .iter()
+                .all(|patch| cache.resident.contains_key(patch))
+        );
+        assert!(!cache.active.contains(&parent));
+        assert!(!cache.active.contains(&child));
+        let resources = cache.resident.clone();
+        assert!(!cache.set_active(mixed.clone(), |_| panic!("selection is already cached")));
+        assert!(cache.set_level(0, |_| panic!("roots are already cached")));
+        for (patch, resource) in roots {
+            assert_eq!(cache.resident[&patch], resource);
+        }
+        assert!(cache.set_active(mixed, |_| panic!("mixed selection is already cached")));
+        assert_eq!(cache.resident, resources);
+    }
+
+    #[test]
+    #[should_panic(expected = "terrain subdivision level exceeds the supported maximum")]
+    fn mixed_selection_rejects_levels_above_cache_limit() {
+        PatchCache::new().set_active(
+            vec![PatchId::new(
+                CubeFace::Front,
+                MAX_SUBDIVISION_LEVEL + 1,
+                0,
+                0,
+            )],
+            |_| (),
+        );
+    }
+
+    #[test]
+    fn skirts_close_every_boundary_with_consistent_winding() {
+        let terrain = Terrain::new(42, PLANET_RADIUS, TERRAIN_MAX_ELEVATION);
+        for resolution in [1, 4] {
+            let surface_vertices = ((resolution + 1) * (resolution + 1)) as usize;
+            let surface_indices = (resolution * resolution * 6) as usize;
+            for level in 0..=MAX_SUBDIVISION_LEVEL {
+                for patch in uniform_patches(level) {
+                    let mesh = generate_patch(resolution, terrain, patch);
+                    let boundary = patch_boundary(resolution);
+                    let unique: std::collections::HashSet<_> = boundary.iter().collect();
+                    assert_eq!(unique.len(), 4 * resolution as usize);
+                    for (offset, &top_index) in boundary.iter().enumerate() {
+                        let top = mesh.vertices[top_index as usize];
+                        let bottom = mesh.vertices[surface_vertices + offset];
+                        let top_position = Vec3::from_array(top.position);
+                        let bottom_position = Vec3::from_array(bottom.position);
+                        assert!(bottom_position.is_finite());
+                        assert!(
+                            bottom_position.length() < terrain.minimum_radius() / 3.0_f32.sqrt()
+                        );
+                        assert!(
+                            top_position
+                                .normalize()
+                                .abs_diff_eq(bottom_position.normalize(), 1.0e-6)
+                        );
+                        assert_eq!(bottom.normal, top.normal);
+                        assert_eq!(bottom.color, top.color);
+                        assert_eq!(bottom.debug_color, top.debug_color);
+                        assert_eq!(bottom.patch_uv, top.patch_uv);
+                        let next_top = Vec3::from_array(
+                            mesh.vertices[boundary[(offset + 1) % boundary.len()] as usize]
+                                .position,
+                        );
+                        let outward = (next_top - top_position).cross(top_position);
+                        for triangle in mesh.indices
+                            [surface_indices + offset * 6..surface_indices + (offset + 1) * 6]
+                            .as_chunks::<3>()
+                            .0
+                        {
+                            let [a, b, c] = [triangle[0], triangle[1], triangle[2]].map(|index| {
+                                Vec3::from_array(mesh.vertices[index as usize].position)
+                            });
+                            assert!((b - a).cross(c - a).dot(outward) > 0.0);
+                        }
+                    }
+
+                    // Every edge above the skirt floor has two oppositely wound
+                    // triangles, including the corners and surface/skirt joins.
+                    let mut edges = HashMap::<_, Vec<_>>::new();
+                    for triangle in mesh.indices.as_chunks::<3>().0 {
+                        for (a, b) in [
+                            (triangle[0], triangle[1]),
+                            (triangle[1], triangle[2]),
+                            (triangle[2], triangle[0]),
+                        ] {
+                            edges.entry((a.min(b), a.max(b))).or_default().push((a, b));
+                        }
+                    }
+                    for ((a, b), directions) in edges {
+                        if a as usize >= surface_vertices && b as usize >= surface_vertices {
+                            assert_eq!(directions.len(), 1);
+                        } else {
+                            assert_eq!(directions.len(), 2);
+                            assert_eq!(directions[0], (directions[1].1, directions[1].0));
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn subdivision_adjustments_stay_within_supported_levels() {
@@ -510,11 +685,11 @@ mod tests {
     }
 
     #[test]
-    fn default_subdivision_preserves_the_original_triangle_count() {
+    fn default_subdivision_adds_only_boundary_skirt_triangles() {
         let patches = uniform_patches(DEFAULT_SUBDIVISION_LEVEL);
         let triangle_count =
             patches.len() * patch_mesh_counts(PATCH_RESOLUTION).index_count as usize / 3;
-        assert_eq!(triangle_count, 6 * 64 * 64 * 2);
+        assert_eq!(triangle_count, 6 * 64 * 64 * 2 + 24 * 32 * 8);
     }
 
     #[test]
@@ -601,8 +776,8 @@ mod tests {
     fn root_patches_have_expected_geometry() {
         const RESOLUTION: u32 = 4;
         let meshes = root_patch_meshes(RESOLUTION, Terrain::new(0, 2.5, 0.0));
-        let vertices_per_face = ((RESOLUTION + 1) * (RESOLUTION + 1)) as usize;
-        let indices_per_face = (RESOLUTION * RESOLUTION * 6) as usize;
+        let vertices_per_face = ((RESOLUTION + 1) * (RESOLUTION + 1) + 4 * RESOLUTION) as usize;
+        let indices_per_face = (RESOLUTION * RESOLUTION * 6 + 24 * RESOLUTION) as usize;
 
         assert_eq!(meshes.len(), CUBE_FACES.len());
         for mesh in meshes {
@@ -627,9 +802,12 @@ mod tests {
 
         assert_eq!(
             mesh.vertices.len(),
-            ((RESOLUTION + 1) * (RESOLUTION + 1)) as usize
+            ((RESOLUTION + 1) * (RESOLUTION + 1) + 4 * RESOLUTION) as usize
         );
-        assert_eq!(mesh.indices.len(), (RESOLUTION * RESOLUTION * 6) as usize);
+        assert_eq!(
+            mesh.indices.len(),
+            (RESOLUTION * RESOLUTION * 6 + 24 * RESOLUTION) as usize
+        );
         assert!(
             mesh.indices
                 .iter()
@@ -666,16 +844,21 @@ mod tests {
         const MAX_ELEVATION: f32 = 0.2;
         let meshes = root_patch_meshes(8, Terrain::new(0, RADIUS, MAX_ELEVATION));
 
-        assert!(meshes.iter().flat_map(|mesh| &mesh.vertices).all(|vertex| {
-            let position = Vec3::from_array(vertex.position);
-            let normal = Vec3::from_array(vertex.normal);
-            position.is_finite()
-                && ((RADIUS - MAX_ELEVATION)..=(RADIUS + MAX_ELEVATION))
-                    .contains(&position.length())
-                && normal.is_finite()
-                && normal.is_normalized()
-                && normal.dot(position.normalize()) > 0.0
-        }));
+        assert!(
+            meshes
+                .iter()
+                .flat_map(|mesh| &mesh.vertices[..9 * 9])
+                .all(|vertex| {
+                    let position = Vec3::from_array(vertex.position);
+                    let normal = Vec3::from_array(vertex.normal);
+                    position.is_finite()
+                        && ((RADIUS - MAX_ELEVATION)..=(RADIUS + MAX_ELEVATION))
+                            .contains(&position.length())
+                        && normal.is_finite()
+                        && normal.is_normalized()
+                        && normal.dot(position.normalize()) > 0.0
+                })
+        );
     }
 
     #[test]
@@ -683,7 +866,7 @@ mod tests {
         let meshes = root_patch_meshes(8, Terrain::new(0, 2.5, 0.2));
 
         for mesh in meshes {
-            let (triangles, remainder) = mesh.indices.as_chunks::<3>();
+            let (triangles, remainder) = mesh.indices[..8 * 8 * 6].as_chunks::<3>();
             assert!(remainder.is_empty());
 
             for &[first, second, third] in triangles {

@@ -31,6 +31,10 @@ impl Terrain {
         }
     }
 
+    pub(super) fn minimum_radius(self) -> f32 {
+        self.base_radius - self.max_elevation
+    }
+
     pub(super) fn position(self, direction: Vec3) -> Vec3 {
         let direction = normalized_direction(direction);
         direction * (self.base_radius + self.height_for_normalized_direction(direction))

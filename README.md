@@ -9,6 +9,7 @@ Press `D` to toggle between normal lighting and an unlit debug view with stable 
 Press `[` to decrease terrain subdivision or `]` to increase it.
 Levels 0, 1, and 2 render 6, 24, and 96 patches respectively, each with a 32×32 grid of cells.
 Subdivision changes apply uniformly across the planet.
+Each patch includes an inward-extending skirt along its boundary to cover gaps when neighboring patches use different subdivision levels.
 
 The window title shows the current level and active and cached patch counts.
 Cached patches include active patches and remain available when switching levels.

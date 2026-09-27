@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
-// Enable in production when automatic selection is connected to the renderer.
-#[cfg(test)]
 mod lod;
+
+use self::lod::LodSelector;
+pub(super) use self::lod::LodView;
 
 use glam::Vec3;
 use wgpu::{Device, RenderPass};
@@ -111,7 +112,15 @@ impl PatchId {
             hash ^= hash >> 16;
         }
 
-        [0, 8, 16].map(|shift| 0.25 + ((hash >> shift) & 0xff) as f32 / 255.0 * 0.65)
+        // Level hue stays recognizable; small variations identify individual patches.
+        let base = match self.level {
+            0 => [0.25, 0.35, 0.7],
+            1 => [0.25, 0.7, 0.25],
+            _ => [0.7, 0.4, 0.25],
+        };
+        std::array::from_fn(|channel| {
+            base[channel] + ((hash >> (channel * 8)) & 0xff) as f32 / 255.0 * 0.15
+        })
     }
 
     fn bounds(self) -> PatchBounds {
@@ -291,13 +300,52 @@ fn axis_coordinate(minimum: f32, maximum: f32, index: u32, resolution: u32) -> f
 pub(super) struct TerrainMesh {
     terrain: Terrain,
     patches: PatchCache<GpuMesh>,
+    selection: TerrainSelection,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TerrainStats {
-    pub level: u32,
+    pub automatic: bool,
+    pub minimum_level: u32,
+    pub maximum_level: u32,
     pub active_patches: usize,
     pub cached_patches: usize,
+}
+
+struct TerrainSelection {
+    automatic: bool,
+    manual_level: u32,
+    lod: LodSelector,
+}
+
+impl TerrainSelection {
+    fn new(terrain: Terrain) -> Self {
+        Self {
+            automatic: true,
+            manual_level: DEFAULT_SUBDIVISION_LEVEL,
+            lod: LodSelector::new(terrain, PLANET_RADIUS, TERRAIN_MAX_ELEVATION),
+        }
+    }
+
+    fn select(&mut self, view: Option<&LodView>) -> Option<Vec<PatchId>> {
+        if self.automatic {
+            view.map(|view| self.lod.select(view))
+        } else {
+            Some(uniform_patches(self.manual_level))
+        }
+    }
+
+    fn toggle(&mut self) {
+        self.automatic = !self.automatic;
+    }
+
+    fn change_level(&mut self, delta: i32) -> bool {
+        let level = adjusted_subdivision_level(self.manual_level, delta);
+        let changed = self.automatic || level != self.manual_level;
+        self.automatic = false;
+        self.manual_level = level;
+        changed
+    }
 }
 
 fn adjusted_subdivision_level(level: u32, delta: i32) -> u32 {
@@ -321,6 +369,7 @@ impl<T> PatchCache<T> {
         }
     }
 
+    #[cfg(test)]
     fn set_level(&mut self, level: u32, generate: impl FnMut(PatchId) -> T) -> bool {
         self.set_active(uniform_patches(level), generate)
     }
@@ -360,31 +409,64 @@ fn uniform_patches(level: u32) -> Vec<PatchId> {
 }
 
 impl TerrainMesh {
-    pub(super) fn new(device: &Device) -> Self {
+    pub(super) fn new(device: &Device, view: Option<&LodView>) -> Self {
+        let terrain = Terrain::new(DEFAULT_TERRAIN_SEED, PLANET_RADIUS, TERRAIN_MAX_ELEVATION);
         let mut mesh = Self {
-            terrain: Terrain::new(DEFAULT_TERRAIN_SEED, PLANET_RADIUS, TERRAIN_MAX_ELEVATION),
+            terrain,
             patches: PatchCache::new(),
+            selection: TerrainSelection::new(terrain),
         };
-        mesh.set_level(device, DEFAULT_SUBDIVISION_LEVEL);
+        let active = mesh
+            .selection
+            .select(view)
+            .unwrap_or_else(|| uniform_patches(DEFAULT_SUBDIVISION_LEVEL));
+        mesh.set_active(device, active);
         mesh
     }
 
-    pub(super) fn set_level(&mut self, device: &Device, level: u32) -> bool {
-        self.patches.set_level(level, |patch| {
+    fn set_active(&mut self, device: &Device, active: Vec<PatchId>) -> bool {
+        self.patches.set_active(active, |patch| {
             let mesh = generate_patch(PATCH_RESOLUTION, self.terrain, patch);
             GpuMesh::new(device, &mesh)
         })
     }
 
     pub(super) fn change_level(&mut self, device: &Device, delta: i32) -> bool {
-        let level = adjusted_subdivision_level(self.stats().level, delta);
-        self.set_level(device, level)
+        let changed = self.selection.change_level(delta);
+        self.update(device, None);
+        changed
+    }
+
+    pub(super) fn toggle_automatic(&mut self, device: &Device, view: Option<&LodView>) {
+        self.selection.toggle();
+        self.update(device, view);
+    }
+
+    pub(super) fn update(&mut self, device: &Device, view: Option<&LodView>) -> bool {
+        let Some(active) = self.selection.select(view) else {
+            return false;
+        };
+        self.set_active(device, active)
     }
 
     pub(super) fn stats(&self) -> TerrainStats {
         TerrainStats {
-            // Construction selects a complete level before exposing this mesh.
-            level: self.patches.active[0].level,
+            automatic: self.selection.automatic,
+            // Construction selects a complete cover before exposing this mesh.
+            minimum_level: self
+                .patches
+                .active
+                .iter()
+                .map(|patch| patch.level)
+                .min()
+                .unwrap(),
+            maximum_level: self
+                .patches
+                .active
+                .iter()
+                .map(|patch| patch.level)
+                .max()
+                .unwrap(),
             active_patches: self.patches.active.len(),
             cached_patches: self.patches.resident.len(),
         }
@@ -400,6 +482,117 @@ impl TerrainMesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn selection_view(distance: f32, viewport_height: u32) -> LodView {
+        LodView {
+            eye: Vec3::new(1.5, 1.0, 2.0).normalize() * distance,
+            forward: -Vec3::new(1.5, 1.0, 2.0).normalize(),
+            vertical_field_of_view: std::f32::consts::FRAC_PI_4,
+            viewport_height,
+            near_plane: 0.1,
+        }
+    }
+
+    fn selection() -> TerrainSelection {
+        TerrainSelection::new(Terrain::new(
+            DEFAULT_TERRAIN_SEED,
+            PLANET_RADIUS,
+            TERRAIN_MAX_ELEVATION,
+        ))
+    }
+
+    #[test]
+    fn automatic_selection_responds_to_real_camera_distances_and_viewport_sizes() {
+        let mut selection = selection();
+        let far = selection.select(Some(&selection_view(25.0, 720))).unwrap();
+        assert_eq!(far, uniform_patches(0));
+        let near = selection.select(Some(&selection_view(1.25, 720))).unwrap();
+        assert!(near.len() > far.len());
+        assert!(near.iter().any(|patch| patch.level != near[0].level));
+        let large = selection.select(Some(&selection_view(1.25, 2880))).unwrap();
+        assert!(large.len() > near.len());
+        // A minimized window supplies no view and preserves the previous selection.
+        assert!(selection.select(None).is_none());
+        assert_eq!(
+            selection.select(Some(&selection_view(1.25, 2880))).unwrap(),
+            large
+        );
+    }
+
+    #[test]
+    fn manual_controls_restore_the_remembered_level_and_ignore_camera_changes() {
+        let mut selection = selection();
+        let near = selection_view(1.25, 1440);
+        assert!(selection.automatic);
+        selection.select(Some(&near));
+        selection.toggle();
+        assert!(!selection.automatic);
+        assert_eq!(selection.select(None).unwrap(), uniform_patches(1));
+        assert!(selection.change_level(1));
+        assert_eq!(selection.select(Some(&near)).unwrap(), uniform_patches(2));
+        assert!(!selection.change_level(1));
+        selection.toggle();
+        assert!(selection.automatic);
+        selection.select(Some(&near));
+        selection.toggle();
+        assert_eq!(selection.select(None).unwrap(), uniform_patches(2));
+        selection.toggle();
+        // Even a clamped bracket input must leave automatic mode.
+        assert!(selection.change_level(1));
+        assert!(!selection.automatic);
+        assert_eq!(selection.select(None).unwrap(), uniform_patches(2));
+        assert!(selection.change_level(-1));
+        assert_eq!(selection.select(Some(&near)).unwrap(), uniform_patches(1));
+    }
+
+    #[test]
+    fn automatic_and_manual_selection_share_the_bounded_cache() {
+        let mut selection = selection();
+        let mut cache = PatchCache::new();
+        let mut generated = 0;
+        for _ in 0..2 {
+            for distance in [25.0, 4.0, 2.0, 1.25, 2.0, 25.0] {
+                let active = selection
+                    .select(Some(&selection_view(distance, 1440)))
+                    .unwrap();
+                cache.set_active(active, |patch| {
+                    generated += 1;
+                    patch
+                });
+            }
+            selection.toggle();
+            for delta in [-1, 1, 1] {
+                selection.change_level(delta);
+                cache.set_active(selection.select(None).unwrap(), |patch| {
+                    generated += 1;
+                    patch
+                });
+            }
+            selection.toggle();
+            assert_eq!(generated, cache.resident.len());
+            assert!(cache.resident.len() <= 126);
+        }
+        assert!(
+            cache
+                .active
+                .iter()
+                .all(|patch| cache.resident[patch] == *patch)
+        );
+    }
+
+    #[test]
+    fn debug_hues_identify_each_supported_level() {
+        for level in 0..=MAX_SUBDIVISION_LEVEL {
+            for patch in uniform_patches(level) {
+                let [red, green, blue] = patch.debug_color();
+                assert!(match level {
+                    0 => blue > red && blue > green,
+                    1 => green > red && green > blue,
+                    _ => red > green && green > blue,
+                });
+            }
+        }
+    }
 
     #[test]
     fn mixed_level_selection_reuses_cached_parents_and_children() {

@@ -97,14 +97,20 @@ impl WindowState {
 
     fn update_title(&self) {
         let stats = self.renderer.terrain_stats();
+        let mode = if stats.automatic { "Auto" } else { "Manual" };
         self.window.set_title(&format!(
-            "{WINDOW_TITLE} | Level {} | Active patches: {} | Cached patches: {}",
-            stats.level, stats.active_patches, stats.cached_patches,
+            "{WINDOW_TITLE} | {mode} | Levels {}-{} | Active patches: {} | Cached patches: {}",
+            stats.minimum_level, stats.maximum_level, stats.active_patches, stats.cached_patches,
         ));
     }
 
     fn key_pressed(&mut self, key: PhysicalKey) {
         match key {
+            PhysicalKey::Code(KeyCode::KeyL) => {
+                self.renderer.toggle_automatic_terrain();
+                self.update_title();
+                self.request_redraw();
+            }
             PhysicalKey::Code(KeyCode::KeyD) => {
                 self.renderer.toggle_patch_debug();
                 self.request_redraw();
@@ -121,8 +127,12 @@ impl WindowState {
     }
 
     fn render(&mut self) -> Result<(), RendererError> {
+        let previous_stats = self.renderer.terrain_stats();
         if self.renderer.render()? == RenderOutcome::Retry {
             self.request_redraw();
+        }
+        if self.renderer.terrain_stats() != previous_stats {
+            self.update_title();
         }
 
         Ok(())

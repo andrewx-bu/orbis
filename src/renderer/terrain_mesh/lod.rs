@@ -7,7 +7,7 @@ use super::{CUBE_FACES, MAX_SUBDIVISION_LEVEL, PATCH_RESOLUTION, PatchId, Terrai
 const SPLIT_ERROR_PIXELS: f32 = 2.0;
 const MERGE_ERROR_PIXELS: f32 = 1.0;
 
-pub(super) struct LodView {
+pub(in crate::renderer) struct LodView {
     pub eye: Vec3,
     pub forward: Vec3,
     pub vertical_field_of_view: f32,

@@ -1,5 +1,9 @@
 use std::collections::HashMap;
 
+// Enable in production when automatic selection is connected to the renderer.
+#[cfg(test)]
+mod lod;
+
 use glam::Vec3;
 use wgpu::{Device, RenderPass};
 

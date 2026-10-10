@@ -28,9 +28,9 @@ use wgpu::{
 use winit::{dpi::PhysicalSize, window::Window};
 
 const CLEAR_COLOR: Color = Color {
-    r: 0.05,
-    g: 0.15,
-    b: 0.4,
+    r: 0.001,
+    g: 0.002,
+    b: 0.005,
     a: 1.0,
 };
 const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32Float;

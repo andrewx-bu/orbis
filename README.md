@@ -2,6 +2,7 @@
 
 Orbis is a procedural planet renderer and simulation project written in Rust.
 The current native demo renders a directionally lit, perspective-projected, depth-tested cube sphere with deterministic CPU-generated terrain.
+Terrain colors blend from green lowlands to rocky slopes and snowy peaks based on elevation and local surface slope.
 Terrain starts in automatic mode, selecting subdivision levels 0–2 independently for each patch using estimated screen-space geometric error.
 Selection responds to camera movement and window size, with separate split and merge thresholds to reduce rapid switching near a boundary.
 Drag with the left mouse button to orbit the cube sphere.

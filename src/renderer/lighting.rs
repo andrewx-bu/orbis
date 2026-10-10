@@ -7,8 +7,9 @@ use wgpu::{
     util::{BufferInitDescriptor, DeviceExt},
 };
 
-const DIRECTION_TO_LIGHT: Vec3 = Vec3::new(-0.5, 1.0, 0.75);
-const AMBIENT_STRENGTH: f32 = 0.2;
+// Side lighting reveals terrain relief from the initial orbital viewpoint.
+const DIRECTION_TO_LIGHT: Vec3 = Vec3::new(-1.0, 0.7, 0.8);
+const AMBIENT_STRENGTH: f32 = 0.08;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]

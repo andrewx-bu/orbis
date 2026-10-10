@@ -17,7 +17,6 @@ const PATCH_RESOLUTION: u32 = 32;
 const DEFAULT_SUBDIVISION_LEVEL: u32 = 1;
 const MAX_SUBDIVISION_LEVEL: u32 = 2;
 const PLANET_RADIUS: f32 = 0.6;
-const TERRAIN_COLOR: [f32; 3] = [0.2, 0.7, 0.35];
 const DEFAULT_TERRAIN_SEED: u32 = 0;
 const TERRAIN_MAX_ELEVATION: f32 = 0.08;
 const CUBE_FACES: [CubeFace; 6] = [
@@ -180,10 +179,12 @@ fn generate_patch(resolution: u32, terrain: Terrain, patch: PatchId) -> MeshData
             );
             let direction =
                 (face.normal + face.horizontal * horizontal + face.vertical * vertical).normalize();
+            let position = terrain.position(direction);
+            let normal = terrain.normal(direction);
             vertices.push(Vertex::new(
-                terrain.position(direction).to_array(),
-                TERRAIN_COLOR,
-                terrain.normal(direction).to_array(),
+                position.to_array(),
+                terrain.normalized_elevation(position),
+                normal.to_array(),
                 debug_color,
                 [
                     column as f32 / resolution as f32,
@@ -673,7 +674,7 @@ mod tests {
                                 .abs_diff_eq(bottom_position.normalize(), 1.0e-6)
                         );
                         assert_eq!(bottom.normal, top.normal);
-                        assert_eq!(bottom.color, top.color);
+                        assert_eq!(bottom.elevation, top.elevation);
                         assert_eq!(bottom.debug_color, top.debug_color);
                         assert_eq!(bottom.patch_uv, top.patch_uv);
                         let next_top = Vec3::from_array(

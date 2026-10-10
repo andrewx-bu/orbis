@@ -40,6 +40,14 @@ impl Terrain {
         direction * (self.base_radius + self.height_for_normalized_direction(direction))
     }
 
+    pub(super) fn normalized_elevation(self, position: Vec3) -> f32 {
+        if self.max_elevation > 0.0 {
+            ((position.length() - self.base_radius) / self.max_elevation).clamp(-1.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
     pub(super) fn normal(self, direction: Vec3) -> Vec3 {
         let direction = normalized_direction(direction);
         if self.max_elevation == 0.0 {
@@ -151,6 +159,26 @@ mod tests {
         Vec3::new(-2.0, 1.0, 0.5),
         Vec3::new(0.25, -1.0, 2.0),
     ];
+
+    #[test]
+    fn material_elevation_is_bounded_and_handles_flat_terrain() {
+        let terrain = Terrain::new(42, BASE_RADIUS, MAX_ELEVATION);
+        for up in DIRECTIONS.map(Vec3::normalize) {
+            assert!(
+                (terrain.normalized_elevation(up * (BASE_RADIUS + MAX_ELEVATION)) - 1.0).abs()
+                    < 1.0e-5
+            );
+            assert!(
+                (terrain.normalized_elevation(up * (BASE_RADIUS - MAX_ELEVATION)) + 1.0).abs()
+                    < 1.0e-5
+            );
+            assert_eq!(terrain.normalized_elevation(up * BASE_RADIUS * 2.0), 1.0);
+        }
+        assert_eq!(
+            Terrain::new(42, BASE_RADIUS, 0.0).normalized_elevation(Vec3::Y * BASE_RADIUS),
+            0.0
+        );
+    }
 
     #[test]
     fn terrain_height_is_deterministic_for_a_seed() {

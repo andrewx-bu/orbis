@@ -183,7 +183,7 @@ fn generate_patch(resolution: u32, terrain: Terrain, patch: PatchId) -> MeshData
             let normal = terrain.normal(direction);
             vertices.push(Vertex::new(
                 position.to_array(),
-                terrain.color(position, normal),
+                terrain.normalized_elevation(position),
                 normal.to_array(),
                 debug_color,
                 [
@@ -674,7 +674,7 @@ mod tests {
                                 .abs_diff_eq(bottom_position.normalize(), 1.0e-6)
                         );
                         assert_eq!(bottom.normal, top.normal);
-                        assert_eq!(bottom.color, top.color);
+                        assert_eq!(bottom.elevation, top.elevation);
                         assert_eq!(bottom.debug_color, top.debug_color);
                         assert_eq!(bottom.patch_uv, top.patch_uv);
                         let next_top = Vec3::from_array(

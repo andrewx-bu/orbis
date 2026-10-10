@@ -40,27 +40,12 @@ impl Terrain {
         direction * (self.base_radius + self.height_for_normalized_direction(direction))
     }
 
-    pub(super) fn color(self, position: Vec3, normal: Vec3) -> [f32; 3] {
-        let elevation = if self.max_elevation > 0.0 {
+    pub(super) fn normalized_elevation(self, position: Vec3) -> f32 {
+        if self.max_elevation > 0.0 {
             ((position.length() - self.base_radius) / self.max_elevation).clamp(-1.0, 1.0)
         } else {
             0.0
-        };
-        // Slope is relative to the planet's local up direction, including at the poles.
-        let slope = 1.0 - normal.normalize().dot(position.normalize()).clamp(0.0, 1.0);
-        let lowland = Vec3::new(0.07, 0.19, 0.06);
-        let upland = Vec3::new(0.24, 0.29, 0.12);
-        let rock = Vec3::new(0.30, 0.27, 0.23);
-        let snow = Vec3::new(0.85, 0.90, 0.94);
-        let vegetation = lowland.lerp(upland, smooth_blend(-0.15, 0.25, elevation));
-        let rock_weight = smooth_blend(0.03, 0.18, slope).max(smooth_blend(0.20, 0.45, elevation));
-        let snow_weight =
-            smooth_blend(0.35, 0.60, elevation) * (1.0 - smooth_blend(0.05, 0.20, slope));
-
-        vegetation
-            .lerp(rock, rock_weight)
-            .lerp(snow, snow_weight)
-            .to_array()
+        }
     }
 
     pub(super) fn normal(self, direction: Vec3) -> Vec3 {
@@ -95,11 +80,6 @@ fn normalized_direction(direction: Vec3) -> Vec3 {
         "terrain direction must be finite and nonzero"
     );
     direction.normalize()
-}
-
-fn smooth_blend(start: f32, end: f32, value: f32) -> f32 {
-    let amount = ((value - start) / (end - start)).clamp(0.0, 1.0);
-    amount * amount * (3.0 - 2.0 * amount)
 }
 
 fn fractal_noise(point: Vec3, seed: u32) -> f32 {
@@ -181,28 +161,22 @@ mod tests {
     ];
 
     #[test]
-    fn terrain_materials_follow_elevation_and_local_slope() {
+    fn material_elevation_is_bounded_and_handles_flat_terrain() {
         let terrain = Terrain::new(42, BASE_RADIUS, MAX_ELEVATION);
-        for up in [Vec3::X, Vec3::Y, Vec3::Z] {
-            let lowland = terrain.color(up * (BASE_RADIUS - MAX_ELEVATION), up);
-            let summit = up * (BASE_RADIUS + MAX_ELEVATION);
-            assert_eq!(lowland, [0.07, 0.19, 0.06]);
-            assert_eq!(terrain.color(summit, up), [0.85, 0.90, 0.94]);
-            assert_eq!(
-                terrain.color(summit, up.any_orthonormal_vector()),
-                [0.30, 0.27, 0.23]
+        for up in DIRECTIONS.map(Vec3::normalize) {
+            assert!(
+                (terrain.normalized_elevation(up * (BASE_RADIUS + MAX_ELEVATION)) - 1.0).abs()
+                    < 1.0e-5
             );
+            assert!(
+                (terrain.normalized_elevation(up * (BASE_RADIUS - MAX_ELEVATION)) + 1.0).abs()
+                    < 1.0e-5
+            );
+            assert_eq!(terrain.normalized_elevation(up * BASE_RADIUS * 2.0), 1.0);
         }
-    }
-
-    #[test]
-    fn flat_terrain_material_is_finite() {
-        let terrain = Terrain::new(42, BASE_RADIUS, 0.0);
-        let color = terrain.color(Vec3::Y * BASE_RADIUS, Vec3::Y);
-        assert!(
-            color
-                .iter()
-                .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
+        assert_eq!(
+            Terrain::new(42, BASE_RADIUS, 0.0).normalized_elevation(Vec3::Y * BASE_RADIUS),
+            0.0
         );
     }
 
